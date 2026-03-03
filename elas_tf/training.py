@@ -1,5 +1,7 @@
+import glob
 import json
 import os
+import re
 import time
 from pathlib import Path
 from typing import Optional, Tuple
@@ -8,6 +10,8 @@ import numpy as np
 import tensorflow as tf
 
 from .checkpointing import ensure_dir
+
+TOTAL_TRAIN_SAMPLES = 60000
 
 
 def _load_mnist() -> Tuple[tf.data.Dataset, tf.data.Dataset, int]:
@@ -40,41 +44,72 @@ def _build_model() -> tf.keras.Model:
     )
 
 
-def _is_chief() -> bool:
-    """Return True if this process is the chief worker for checkpointing."""
+def _get_worker_info() -> Tuple[int, int]:
+    """Return (worker_index, num_workers) from TF_CONFIG."""
     tf_config = os.getenv("TF_CONFIG")
     if not tf_config:
-        return True
+        return 0, 1
     try:
         cfg = json.loads(tf_config)
         task = cfg.get("task", {})
-        return task.get("type") == "worker" and int(task.get("index", 0)) == 0
+        index = int(task.get("index", 0))
+        num_workers = len(cfg.get("cluster", {}).get("worker", []))
+        return index, max(num_workers, 1)
     except Exception:
-        return True
+        return 0, 1
+
+
+def _is_chief() -> bool:
+    idx, _ = _get_worker_info()
+    return idx == 0
 
 
 def _write_checkpoint_dir_for_worker(checkpoint_dir: str) -> str:
-    """In MultiWorkerMirroredStrategy, non-chief workers must write to a
-    temporary directory to avoid conflicts. The chief writes to the real dir."""
     if _is_chief():
         return checkpoint_dir
-    # Non-chief workers use a temp subdir (TF convention).
     task_dir = os.path.join(checkpoint_dir, "temp_worker")
     ensure_dir(task_dir)
     return task_dir
 
 
+def _find_latest_checkpoint(checkpoint_dir: str) -> Tuple[Optional[str], int]:
+    pattern = os.path.join(checkpoint_dir, "ckpt-*.index")
+    files = glob.glob(pattern)
+    if not files:
+        return None, 0
+
+    best_epoch = 0
+    best_path = None
+    for f in files:
+        match = re.search(r"ckpt-(\d+)\.index$", f)
+        if match:
+            epoch = int(match.group(1))
+            if epoch > best_epoch:
+                best_epoch = epoch
+                best_path = f.replace(".index", "")
+
+    return best_path, best_epoch
+
+
 def run_baseline_training(epochs: int = 5) -> None:
-    """Run a baseline MultiWorkerMirroredStrategy training job on MNIST."""
+    worker_index, num_workers = _get_worker_info()
+
+    print("")
+    print("=" * 60)
+    print(f"[training] WORKER {worker_index} of {num_workers} starting up")
+    print("=" * 60)
+
     tf_config = os.getenv("TF_CONFIG")
     if tf_config:
-        print("[training] Using TF_CONFIG environment.")
+        print(f"[training] Using TF_CONFIG for distributed training.")
+        print(f"[training] Cluster has {num_workers} workers. I am worker {worker_index}.")
     else:
-        print("[training] WARNING: TF_CONFIG not set, running as single-worker.")
+        print(f"[training] No TF_CONFIG set. Running as single worker.")
 
     checkpoint_dir = os.getenv("CHECKPOINT_DIR", "/shared/checkpoints")
     ensure_dir(checkpoint_dir)
 
+    print(f"[training] Setting up MultiWorkerMirroredStrategy...")
     strategy = _get_strategy()
 
     with strategy.scope():
@@ -84,38 +119,110 @@ def run_baseline_training(epochs: int = 5) -> None:
             loss="sparse_categorical_crossentropy",
             metrics=["accuracy"],
         )
+    print(f"[training] Model compiled under distributed strategy.")
+
+    # Restore from the latest checkpoint if one exists.
+    latest_ckpt, completed_epochs = _find_latest_checkpoint(checkpoint_dir)
+    if latest_ckpt:
+        model.load_weights(latest_ckpt)
+        print("")
+        print("+" * 60)
+        print(f"[training] CHECKPOINT RESTORED: {latest_ckpt}")
+        print(f"[training] Already completed {completed_epochs} of {epochs} epochs.")
+        print(f"[training] Resuming training from epoch {completed_epochs + 1}.")
+        print("+" * 60)
+        print("")
+    else:
+        print(f"[training] No checkpoint found. Training from scratch (epoch 1).")
+
+    if completed_epochs >= epochs:
+        print(f"[training] Already completed all {epochs} epochs. Nothing to do.")
+        return
 
     train_ds, test_ds, train_size = _load_mnist()
 
-    # Use the built-in ModelCheckpoint callback which is designed for
-    # MultiWorkerMirroredStrategy. Each worker calls it, but only the
-    # chief actually writes to the real checkpoint_dir.
+    # Data sharding info.
+    samples_per_worker = train_size // num_workers
+    print("")
+    print("-" * 60)
+    print(f"[training] DATA SHARDING:")
+    print(f"[training]   Total training samples: {train_size}")
+    print(f"[training]   Number of workers:      {num_workers}")
+    print(f"[training]   Samples per worker:     ~{samples_per_worker}")
+    print(f"[training]   This worker (index {worker_index}) processes ~{samples_per_worker} samples/epoch")
+    print("-" * 60)
+    print("")
+
     write_dir = _write_checkpoint_dir_for_worker(checkpoint_dir)
+    ckpt_path_template = os.path.join(write_dir, "ckpt-{epoch:02d}")
     checkpoint_cb = tf.keras.callbacks.ModelCheckpoint(
-        filepath=os.path.join(write_dir, "ckpt-{epoch:02d}"),
+        filepath=ckpt_path_template,
         save_weights_only=True,
     )
 
-    print("[training] Starting training...")
+    def on_epoch_begin(epoch, logs=None):
+        print("")
+        print(f"[checkpoint] --- Epoch {epoch + 1}/{epochs} starting ---")
+        print(f"[checkpoint]   Workers in cluster: {num_workers}")
+        print(f"[checkpoint]   Samples this worker will process: ~{samples_per_worker}")
+
+    def on_epoch_end(epoch, logs=None):
+        loss = logs.get("loss", "?")
+        acc = logs.get("accuracy", "?")
+        val_loss = logs.get("val_loss", "?")
+        val_acc = logs.get("val_accuracy", "?")
+        ckpt_file = ckpt_path_template.format(epoch=epoch + 1)
+
+        print("")
+        print("+" * 60)
+        print(f"[checkpoint] EPOCH {epoch + 1}/{epochs} COMPLETE")
+        print(f"[checkpoint]   Train loss:     {loss}")
+        print(f"[checkpoint]   Train accuracy: {acc}")
+        print(f"[checkpoint]   Val loss:       {val_loss}")
+        print(f"[checkpoint]   Val accuracy:   {val_acc}")
+        if _is_chief():
+            print(f"[checkpoint]   Checkpoint saved to: {ckpt_file}")
+        else:
+            print(f"[checkpoint]   (Non-chief worker, checkpoint written by chief)")
+        print("+" * 60)
+        print("")
+
+    epoch_log_cb = tf.keras.callbacks.LambdaCallback(
+        on_epoch_begin=on_epoch_begin,
+        on_epoch_end=on_epoch_end,
+    )
+
+    remaining_epochs = epochs - completed_epochs
+    print(f"[training] Starting training: epoch {completed_epochs + 1} to {epochs} ({remaining_epochs} epochs remaining)")
     start_time = time.time()
 
     history = model.fit(
         train_ds,
         validation_data=test_ds,
         epochs=epochs,
-        callbacks=[checkpoint_cb],
+        initial_epoch=completed_epochs,
+        callbacks=[checkpoint_cb, epoch_log_cb],
     )
 
     wall_time = time.time() - start_time
-    total_samples = train_size * epochs
+    total_samples = train_size * remaining_epochs
     throughput = total_samples / wall_time if wall_time > 0 else 0.0
 
     train_acc = history.history.get("accuracy", [None])[-1]
     val_acc = history.history.get("val_accuracy", [None])[-1]
 
-    print("[training] Training complete.")
-    print(f"[training] Wall time: {wall_time:.2f}s, throughput: {throughput:.1f} samples/sec (approx).")
-    print(f"[training] Final train accuracy: {train_acc}, final val accuracy: {val_acc}")
+    print("")
+    print("=" * 60)
+    print(f"[training] TRAINING COMPLETE (worker {worker_index})")
+    print(f"[training]   Epochs trained:        {remaining_epochs} (epoch {completed_epochs + 1} to {epochs})")
+    print(f"[training]   Wall time:             {wall_time:.2f}s")
+    print(f"[training]   Throughput:             {throughput:.1f} samples/sec")
+    print(f"[training]   Final train accuracy:   {train_acc:.4f}" if train_acc else "[training]   Final train accuracy:   N/A")
+    print(f"[training]   Final val accuracy:     {val_acc:.4f}" if val_acc else "[training]   Final val accuracy:     N/A")
+    print(f"[training]   Workers in cluster:     {num_workers}")
+    print(f"[training]   Samples/worker/epoch:   ~{samples_per_worker}")
+    print("=" * 60)
+    print("")
 
 
 def _get_strategy() -> tf.distribute.Strategy:

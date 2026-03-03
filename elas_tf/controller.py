@@ -16,18 +16,6 @@ def _config_dir() -> Path:
 
 
 def _write_tf_config(worker_states: Dict[str, Dict], generation: int) -> None:
-    """Write a TF_CONFIG mapping for all workers to the shared config dir.
-
-    The file format is:
-    {
-      "generation": int,
-      "workers": ["0", "1", ...],
-      "configs": {
-        "0": {<TF_CONFIG for worker 0>},
-        "1": {<TF_CONFIG for worker 1>}
-      }
-    }
-    """
     cfg_dir = _config_dir()
     cfg_dir.mkdir(parents=True, exist_ok=True)
     path = cfg_dir / TF_CONFIG_FILENAME
@@ -50,7 +38,6 @@ def _write_tf_config(worker_states: Dict[str, Dict], generation: int) -> None:
 
     payload = {"generation": generation, "workers": worker_ids, "configs": configs}
     path.write_text(json.dumps(payload), encoding="utf-8")
-    print(f"[controller] Wrote TF_CONFIG for workers={worker_ids} to {path}")
 
 
 def run_controller() -> None:
@@ -58,7 +45,14 @@ def run_controller() -> None:
     monitor = HeartbeatMonitor(port=port)
     monitor.start()
 
+    print("")
+    print("=" * 60)
+    print(f"[controller] ElasTF Controller started")
     print(f"[controller] Heartbeat monitor listening on 0.0.0.0:{port}")
+    print(f"[controller] Heartbeat timeout: 15s")
+    print(f"[controller] Waiting for workers to register...")
+    print("=" * 60)
+    print("")
 
     generation = 0
     known_workers: Dict[str, Dict] = {}
@@ -66,45 +60,53 @@ def run_controller() -> None:
 
     try:
         while True:
-            # Handle incoming heartbeat/join events.
             events = monitor.poll_events()
             membership_changed = False
             for ev in events:
                 if ev.event_type == "join":
                     if ev.worker_id not in known_workers:
-                        print(f"[controller] Worker join detected: {ev.worker_id} ({ev.host}:{ev.port})")
+                        print(f"[controller] >>> WORKER JOIN: worker {ev.worker_id} at {ev.host}:{ev.port}")
                         membership_changed = True
                     known_workers[ev.worker_id] = {"host": ev.host or "", "port": ev.port or 12345}
                 elif ev.event_type == "heartbeat":
-                    # Heartbeats should not trigger a cluster reconfiguration; they only update liveness.
                     if ev.worker_id in known_workers:
                         known_workers[ev.worker_id] = {"host": ev.host or known_workers[ev.worker_id]["host"], "port": ev.port or known_workers[ev.worker_id]["port"]}
                 elif ev.event_type == "failure":
                     if ev.worker_id in known_workers:
-                        print(f"[controller] Worker failure detected: {ev.worker_id}")
+                        print(f"[controller] !!! WORKER FAILURE: worker {ev.worker_id}")
                         known_workers.pop(ev.worker_id, None)
                         membership_changed = True
 
-            # Detect failures based on timeout and generate corresponding events.
             failures: List[HeartbeatEvent] = monitor.detect_failures()
             for ev in failures:
                 if ev.worker_id in known_workers:
-                    print(f"[controller] Worker timed out: {ev.worker_id}")
+                    print(f"[controller] !!! WORKER TIMEOUT: worker {ev.worker_id} (no heartbeat received)")
                     known_workers.pop(ev.worker_id, None)
                     membership_changed = True
 
-            # If membership changed, bump generation and rewrite TF_CONFIG.
             if membership_changed:
                 active_ids = sorted(known_workers.keys(), key=lambda x: int(x)) if known_workers else []
-                print(f"[controller] Membership change detected. Active workers now: {active_ids}")
+                num_active = len(active_ids)
+
+                print("")
+                print("-" * 60)
+                print(f"[controller] CLUSTER MEMBERSHIP CHANGED")
+                print(f"[controller]   Active workers: {active_ids}")
+                print(f"[controller]   Worker count:   {num_active}")
 
                 if known_workers:
                     ever_had_workers = True
                     generation += 1
                     _write_tf_config(known_workers, generation)
-                    print(f"[controller] Cluster generation updated to {generation}")
+                    print(f"[controller]   New generation: {generation}")
+                    print(f"[controller]   TF_CONFIG written with {num_active} workers")
+                    print(f"[controller]   Data will be sharded: 60000 / {num_active} = ~{60000 // num_active} samples/worker")
                 elif ever_had_workers:
-                    print("[controller] All workers have left. Waiting for new workers...")
+                    print(f"[controller]   All workers have left.")
+                    print(f"[controller]   Waiting for new workers to join...")
+
+                print("-" * 60)
+                print("")
 
             time.sleep(1.0)
     except KeyboardInterrupt:
@@ -119,4 +121,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

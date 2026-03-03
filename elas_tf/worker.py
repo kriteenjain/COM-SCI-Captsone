@@ -30,7 +30,18 @@ def _load_tf_config_for_worker(worker_id: str) -> tuple[str | None, int]:
         return None, 0
 
     generation = int(data.get("generation", 0))
-    print(f"[worker {worker_id}] Loaded TF_CONFIG (generation={generation}) from {cfg_path}")
+    num_workers = len(data.get("workers", []))
+    worker_list = data.get("workers", [])
+
+    print("")
+    print("=" * 60)
+    print(f"[worker {worker_id}] CLUSTER CONFIG LOADED")
+    print(f"[worker {worker_id}]   Generation:  {generation}")
+    print(f"[worker {worker_id}]   Workers:     {worker_list}")
+    print(f"[worker {worker_id}]   My role:     worker {worker_id} of {num_workers}")
+    print("=" * 60)
+    print("")
+
     return json.dumps(cfg), generation
 
 
@@ -39,13 +50,13 @@ def run_worker() -> None:
     controller_host = os.getenv("CONTROLLER_HOST", "controller")
     heartbeat_port = int(os.getenv("HEARTBEAT_PORT", "5000"))
     startup_sleep_secs = float(os.getenv("STARTUP_SLEEP_SECS", "20"))
-
-    # MultiWorker ports are arbitrary here; all workers share the same port.
     tf_port = int(os.getenv("TF_PORT", "12345"))
 
-    # Use "localhost" when running locally so TF_CONFIG contains a resolvable address.
     host = os.getenv("WORKER_HOST", "localhost")
+
+    print(f"[worker {worker_id}] Registering with controller at {controller_host}:{heartbeat_port}...")
     send_join(controller_host, heartbeat_port, worker_id=worker_id, host=host, port=tf_port)
+    print(f"[worker {worker_id}] Starting heartbeat sender (every 2s)...")
     stop_hb = start_heartbeat_sender(
         controller_host=controller_host,
         controller_port=heartbeat_port,
@@ -56,7 +67,7 @@ def run_worker() -> None:
 
     try:
         if startup_sleep_secs > 0:
-            print(f"[worker {worker_id}] Sleeping {startup_sleep_secs:.0f}s to allow cluster startup...")
+            print(f"[worker {worker_id}] Sleeping {startup_sleep_secs:.0f}s to allow all workers to register...")
             time.sleep(startup_sleep_secs)
 
         tf_config, generation = _load_tf_config_for_worker(worker_id)
@@ -67,11 +78,17 @@ def run_worker() -> None:
             os.environ.pop("TF_CONFIG", None)
             os.environ.pop("TF_GENERATION", None)
 
-        print(f"[worker {worker_id}] Starting training process.")
+        print(f"[worker {worker_id}] Launching distributed training...")
         training.main()
-        print(f"[worker {worker_id}] Training finished.")
+
+        print("")
+        print("*" * 60)
+        print(f"[worker {worker_id}] Training finished successfully!")
+        print("*" * 60)
+        print("")
     finally:
         stop_hb.set()
+        print(f"[worker {worker_id}] Heartbeat stopped.")
 
 
 def main() -> None:
@@ -80,4 +97,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
