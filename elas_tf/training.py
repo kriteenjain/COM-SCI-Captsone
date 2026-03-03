@@ -50,22 +50,18 @@ def _is_chief() -> bool:
         # Single-worker case.
         return True
 
+    # Parse TF_CONFIG directly to determine task index.
+    import json
+
     try:
-        cfg = tf.config.experimental.get_cluster_spec()
-        task_type = tf.distribute.get_replica_context().replica_id_in_sync_group  # type: ignore[assignment]
+        cfg = json.loads(tf_config)
+        task = cfg.get("task", {})
+        task_type = task.get("type")
+        task_index = int(task.get("index", 0))
+        return task_type == "worker" and task_index == 0
     except Exception:
-        # Fallback to environment parsing.
-        import json
-
-        try:
-            cfg = json.loads(tf_config)
-            task = cfg.get("task", {})
-            return task.get("type") == "worker" and int(task.get("index", 0)) == 0
-        except Exception:
-            return True
-
-    # If we cannot reliably determine, default to True to avoid skipping checkpoints.
-    return True
+        # If we cannot reliably determine, default to True to avoid skipping checkpoints.
+        return True
 
 
 def run_baseline_training(epochs: int = 5) -> None:
