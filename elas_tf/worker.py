@@ -54,41 +54,30 @@ def run_worker() -> None:
 
     host = os.getenv("WORKER_HOST", "localhost")
 
-    print(f"[worker {worker_id}] Registering with controller at {controller_host}:{heartbeat_port}...")
-    send_join(controller_host, heartbeat_port, worker_id=worker_id, host=host, port=tf_port)
-    print(f"[worker {worker_id}] Starting heartbeat sender (every 2s)...")
-    stop_hb = start_heartbeat_sender(
-        controller_host=controller_host,
-        controller_port=heartbeat_port,
-        worker_id=worker_id,
-        host=host,
-        port=tf_port,
-    )
+    # Heartbeat is now handled by a separate process (heartbeat_sender.py) started
+    # by the bash wrapper, so it survives TF crashes. No in-process heartbeat here.
+    print(f"[worker {worker_id}] Heartbeat handled by external process (survives TF crashes).")
 
-    try:
-        if startup_sleep_secs > 0:
-            print(f"[worker {worker_id}] Sleeping {startup_sleep_secs:.0f}s to allow all workers to register...")
-            time.sleep(startup_sleep_secs)
+    if startup_sleep_secs > 0:
+        print(f"[worker {worker_id}] Sleeping {startup_sleep_secs:.0f}s to allow all workers to register...")
+        time.sleep(startup_sleep_secs)
 
-        tf_config, generation = _load_tf_config_for_worker(worker_id)
-        if tf_config:
-            os.environ["TF_CONFIG"] = tf_config
-            os.environ["TF_GENERATION"] = str(generation)
-        else:
-            os.environ.pop("TF_CONFIG", None)
-            os.environ.pop("TF_GENERATION", None)
+    tf_config, generation = _load_tf_config_for_worker(worker_id)
+    if tf_config:
+        os.environ["TF_CONFIG"] = tf_config
+        os.environ["TF_GENERATION"] = str(generation)
+    else:
+        os.environ.pop("TF_CONFIG", None)
+        os.environ.pop("TF_GENERATION", None)
 
-        print(f"[worker {worker_id}] Launching distributed training...")
-        training.main()
+    print(f"[worker {worker_id}] Launching distributed training...")
+    training.main()
 
-        print("")
-        print("*" * 60)
-        print(f"[worker {worker_id}] Training finished successfully!")
-        print("*" * 60)
-        print("")
-    finally:
-        stop_hb.set()
-        print(f"[worker {worker_id}] Heartbeat stopped.")
+    print("")
+    print("*" * 60)
+    print(f"[worker {worker_id}] Training finished successfully!")
+    print("*" * 60)
+    print("")
 
 
 def main() -> None:
