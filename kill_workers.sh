@@ -13,45 +13,30 @@ if [ $# -lt 1 ]; then
     exit 1
 fi
 
-PIDS_FILE="shared/config/worker_pids"
-KILLED_IDS_FILE="shared/config/killed_ids"
+TMPDIR_LAUNCH="/tmp/elastf_launch"
 
-if [ ! -f "$PIDS_FILE" ]; then
-    echo "No worker_pids file found. Is launch.sh running?"
-    exit 1
-fi
-
-# Read PIDs into an array (macOS-compatible, no mapfile).
-ALL_PIDS=()
-while IFS= read -r line; do
-    [ -n "$line" ] && ALL_PIDS+=("$line")
-done < "$PIDS_FILE"
-
-TOTAL=${#ALL_PIDS[@]}
-if [ "$TOTAL" -lt 1 ]; then
-    echo "No workers found in PID file."
-    exit 1
-fi
-
-# Kill each requested worker AND all its child processes (heartbeat sender, python).
-> "$KILLED_IDS_FILE"
 for id in "$@"; do
-    echo "$id" >> "$KILLED_IDS_FILE"
-    if [ "$id" -lt "$TOTAL" ] 2>/dev/null; then
-        PID="${ALL_PIDS[$id]}"
-        # Find all child PIDs (heartbeat_sender, python) before killing the parent.
-        CHILDREN=$(pgrep -P "$PID" 2>/dev/null)
-        kill -9 "$PID" 2>/dev/null
-        for cpid in $CHILDREN; do
-            kill -9 "$cpid" 2>/dev/null
-        done
-        echo "Killed worker $id (pid=$PID, children: ${CHILDREN:-none})"
-    else
-        echo "Worker $id not found (only $TOTAL workers running: 0-$((TOTAL-1)))"
+    PIDFILE="$TMPDIR_LAUNCH/worker_${id}.pid"
+    if [ ! -f "$PIDFILE" ]; then
+        echo "Worker $id: PID file not found ($PIDFILE). Skipping."
+        continue
     fi
+
+    PID=$(cat "$PIDFILE")
+    if [ -z "$PID" ]; then
+        echo "Worker $id: PID file is empty. Skipping."
+        continue
+    fi
+
+    # Find all child PIDs (heartbeat_sender, python) before killing the parent.
+    CHILDREN=$(pgrep -P "$PID" 2>/dev/null)
+    kill -9 "$PID" 2>/dev/null
+    for cpid in $CHILDREN; do
+        kill -9 "$cpid" 2>/dev/null
+    done
+    echo "Killed worker $id (pid=$PID, children: ${CHILDREN:-none})"
 done
 
-REMAINING=$((TOTAL - $#))
-[ "$REMAINING" -lt 0 ] && REMAINING=0
+echo ""
 echo "Controller will detect failure via heartbeat timeout (~15s)."
-echo "Supervisor will restart $REMAINING surviving worker(s)."
+echo "Supervisor will restart surviving workers automatically."

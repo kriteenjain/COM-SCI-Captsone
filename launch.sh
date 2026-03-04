@@ -18,6 +18,7 @@ EPOCHS=5
 TMPDIR_LAUNCH="/tmp/elastf_launch"
 REMAINING_FILE="$PROJECT_DIR/shared/config/remaining_workers"
 SIGNAL_DIR="$PROJECT_DIR/shared/config/signals"
+SCALE_UP_FILE="$PROJECT_DIR/shared/config/scale_up"
 
 echo "[supervisor] Killing any old ElasTF processes..."
 pkill -9 -f "elas_tf.controller" 2>/dev/null
@@ -64,6 +65,7 @@ cleanup() {
     echo "[supervisor] Shutting down..."
     pkill -9 -f "elas_tf.controller" 2>/dev/null
     pkill -9 -f "elas_tf.worker" 2>/dev/null
+    pkill -9 -f "elas_tf.heartbeat_sender" 2>/dev/null
     rm -rf "$TMPDIR_LAUNCH"
     echo "[supervisor] Done."
     exit 0
@@ -231,9 +233,20 @@ while true; do
     echo "[supervisor] Heartbeat timeout is 15s — controller will detect failures after that."
     echo ""
 
-    # Wait for at least one worker PID to exit.
+    # Wait for a worker PID to exit OR a scale-up signal.
     EXITED_PID=""
-    while [ -z "$EXITED_PID" ]; do
+    SCALED_UP=0
+    while [ -z "$EXITED_PID" ] && [ "$SCALED_UP" -eq 0 ]; do
+        if [ -f "$SCALE_UP_FILE" ]; then
+            while IFS= read -r line || [ -n "$line" ]; do
+                line=$(echo "$line" | tr -d ' \n')
+                [ -n "$line" ] && ALIVE_IDS+=("$line")
+            done < "$SCALE_UP_FILE"
+            rm -f "$SCALE_UP_FILE"
+            ACTIVE_WORKERS=${#ALIVE_IDS[@]}
+            SCALED_UP=1
+            break
+        fi
         for pid in "${WORKER_PIDS[@]}"; do
             if ! kill -0 "$pid" 2>/dev/null; then
                 EXITED_PID=$pid
@@ -242,6 +255,14 @@ while true; do
         done
         sleep 1
     done
+
+    if [ "$SCALED_UP" -eq 1 ]; then
+        echo ""
+        echo "[supervisor] Scale-up detected! New ALIVE_IDS: ${ALIVE_IDS[*]} ($ACTIVE_WORKERS workers)"
+        echo "[supervisor] Looping back to re-read PIDs for the larger cluster."
+        echo ""
+        continue
+    fi
 
     echo ""
     echo "[supervisor] Worker exit detected (pid=$EXITED_PID)."
@@ -292,19 +313,15 @@ while true; do
     echo "[supervisor] ELASTIC RECOVERY: restarting ${#SURVIVOR_IDS[@]} worker(s): ${SURVIVOR_IDS[*]}"
     echo "============================================================"
 
-    # Write restart signals ONLY for surviving workers (with new ports for smaller cluster).
-    NEW_BASE_PORT=$((30000 + RANDOM % 10000))
-    PORT_IDX=0
+    # Write restart signals for surviving workers (keep their current ports —
+    # the old python processes are dead so ports are freed).
     ALIVE_IDS=()
     for i in "${SURVIVOR_IDS[@]}"; do
-        NEW_TF_PORT=$((NEW_BASE_PORT + PORT_IDX))
         cat > "$SIGNAL_DIR/restart_${i}" <<SIGEOF
-export TF_PORT=$NEW_TF_PORT
 export STARTUP_SLEEP_SECS=20
 SIGEOF
-        echo "[supervisor] Restart signal for worker $i (new port $NEW_TF_PORT)"
+        echo "[supervisor] Restart signal for worker $i"
         ALIVE_IDS+=("$i")
-        PORT_IDX=$((PORT_IDX + 1))
     done
 
     ACTIVE_WORKERS=${#ALIVE_IDS[@]}
@@ -314,5 +331,6 @@ done
 
 # Clean up.
 pkill -9 -f "elas_tf.controller" 2>/dev/null
+pkill -9 -f "elas_tf.heartbeat_sender" 2>/dev/null
 rm -rf "$TMPDIR_LAUNCH"
 echo "[supervisor] Controller stopped. All done."
