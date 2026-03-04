@@ -7,13 +7,13 @@ ElasTF demonstrates fault-tolerant, elastic distributed deep learning on a local
 ## Features
 
 - **Distributed training** using `tf.distribute.MultiWorkerMirroredStrategy` on MNIST
-- **Heartbeat-based failure detection** — TCP heartbeat protocol with a standalone sender process that survives TF cascade crashes, enabling the controller to distinguish intentionally killed workers from crash victims
+- **Heartbeat-based failure detection** — TCP heartbeat protocol (2s interval, 8s timeout) with a standalone sender process that survives TF cascade crashes, enabling the controller to distinguish intentionally killed workers from crash victims
 - **Automatic checkpointing** via `tf.keras.callbacks.ModelCheckpoint` with chief-worker write coordination
 - **Scale down** — kill any number of workers (Ctrl+C or `kill_workers.sh`); the controller detects the failure via heartbeat timeout, and the supervisor restarts surviving workers in their existing terminals from the latest checkpoint
 - **Scale up** — add a worker at any time (`add_worker.sh`); the controller registers it immediately and the cluster reconfigures without waiting for a heartbeat timeout
 - **Dynamic `TF_CONFIG`** — the controller regenerates cluster configuration on every membership or port change, with generation tracking
 - **In-terminal restart** — surviving workers restart inside their existing terminal windows (no new terminal spawning on recovery)
-- **Stabilization window** — after a failure, the controller waits 10 seconds to collect all survivor heartbeats before reporting, preventing premature recovery decisions
+- **Stabilization window** — after a failure, the controller waits 5 seconds to collect all survivor heartbeats before reporting, preventing premature recovery decisions
 
 ## Architecture
 
@@ -124,13 +124,13 @@ Configuration is at the top of `launch.sh`:
 | `NUM_WORKERS`   | 3       | Initial number of workers                          |
 | `EPOCHS`        | 5       | Training epochs per generation                     |
 | `HEARTBEAT_PORT`| 6000    | Controller heartbeat listen port                   |
-| `STARTUP_SLEEP` | 15      | Seconds workers wait for all peers before training |
+| `STARTUP_SLEEP` | 10      | Seconds workers wait for all peers before training |
 
 ### Simulate a failure (scale down)
 
 **Option A — Ctrl+C in a worker terminal:**
 
-Press Ctrl+C in any worker terminal window. That worker's bash wrapper traps the signal, kills both the heartbeat sender and python process, and exits. The controller detects the missing heartbeat after ~15 seconds, and the supervisor restarts surviving workers.
+Press Ctrl+C in any worker terminal window. That worker's bash wrapper traps the signal, kills both the heartbeat sender and python process, and exits. The controller detects the missing heartbeat after ~8 seconds, and the supervisor restarts surviving workers.
 
 **Option B — `kill_workers.sh`:**
 
@@ -152,24 +152,25 @@ The script kills each worker's bash wrapper and all its children (heartbeat send
 
 | Phase                | Duration | What happens                                          |
 |----------------------|----------|-------------------------------------------------------|
-| Heartbeat timeout    | ~15s     | Controller waits for heartbeats that never arrive     |
-| Stabilization window | ~10s     | Controller confirms no more workers are dropping      |
+| Heartbeat timeout    | ~8s      | Controller waits for heartbeats that never arrive     |
+| Stabilization window | ~5s      | Controller confirms no more workers are dropping      |
 | Supervisor picks up  | ~2s      | Supervisor reads `remaining_workers`, sends signals   |
-| Workers restart      | ~20s     | Surviving workers restart training from checkpoint    |
+| Workers restart      | ~10s     | Surviving workers restart training from checkpoint    |
 
-### Add a worker (scale up)
+### Add workers (scale up)
 
 While training is running, from a separate terminal:
 
 ```bash
-./add_worker.sh
+./add_worker.sh          # add 1 worker
+./add_worker.sh 3        # add 3 workers at once
 ```
 
 What happens:
 
-1. Reads `tf_config.json` to find current workers and determines the next ID.
-2. Opens a new terminal for the new worker with a heartbeat sender.
-3. Waits for the controller to register the new worker (~2-5s).
+1. Reads `tf_config.json` to find current workers and determines the next N IDs.
+2. Opens N new terminals, each with a heartbeat sender.
+3. Waits for the controller to register all new workers (~2-5s).
 4. Stops existing workers' python training (heartbeat senders stay alive).
 5. Writes restart signals so all workers pick up the new cluster config.
 6. All workers (old + new) restart training together from the latest checkpoint.
@@ -178,9 +179,9 @@ What happens:
 
 | Phase                  | Duration | What happens                                          |
 |------------------------|----------|-------------------------------------------------------|
-| New worker registered  | ~2-5s    | Controller sees join heartbeat immediately            |
+| New workers registered | ~2-5s    | Controller sees join heartbeats immediately           |
 | Existing workers stop  | ~1s      | Training processes killed, heartbeats stay alive      |
-| Workers restart        | ~20s     | All workers restart training from checkpoint          |
+| Workers restart        | ~10s     | All workers restart training from checkpoint          |
 
 Scale up is faster than scale down because detecting presence (a join heartbeat) is instant, while detecting absence (a missing heartbeat) requires a timeout.
 
@@ -220,7 +221,7 @@ Each worker runs a **standalone heartbeat sender** as a separate process. This s
 - Survives TF cascade crashes (when one worker dies, TensorFlow kills all collective operations, but the heartbeat sender keeps running)
 
 This design lets the controller distinguish between:
-- **Intentionally killed workers** — heartbeat sender is dead, controller times out after 15s
+- **Intentionally killed workers** — heartbeat sender is dead, controller times out after 8s
 - **TF cascade crash victims** — heartbeat sender is still alive, controller sees them as healthy survivors
 
 ### Controller logic
@@ -229,7 +230,7 @@ The controller (`controller.py`) runs a main loop that:
 1. Polls heartbeat events (joins, heartbeats, failures)
 2. Detects timeouts for workers whose heartbeats stopped
 3. On membership change: writes a new `tf_config.json` with updated cluster topology
-4. On membership shrink: starts a 10-second stabilization window, then writes `remaining_workers` listing survivor IDs
+4. On membership shrink: starts a 5-second stabilization window, then writes `remaining_workers` listing survivor IDs
 5. On port change (worker rejoin): rewrites `tf_config.json` with updated ports
 
 ### Supervisor logic
@@ -237,7 +238,7 @@ The controller (`controller.py`) runs a main loop that:
 The supervisor (`launch.sh`) runs a main loop that:
 1. Tracks alive worker IDs and their PIDs
 2. Polls for worker PID exits (failure) or a `scale_up` file (from `add_worker.sh`)
-3. On failure: waits up to 45s for the controller's `remaining_workers` file, then sends restart signals to survivors
+3. On failure: waits up to 25s for the controller's `remaining_workers` file, then sends restart signals to survivors
 4. On scale up: adds new worker IDs to its tracking and re-reads PIDs
 5. On training completion: detects the `training_done` marker and shuts down cleanly
 
