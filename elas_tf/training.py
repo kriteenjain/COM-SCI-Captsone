@@ -13,6 +13,7 @@ import tensorflow as tf
 from .checkpointing import ensure_dir
 
 TOTAL_TRAIN_SAMPLES = 60000
+WALL_TIME_FILE = "cumulative_wall_time"
 
 # CSV header written once per run (chief worker only).
 _METRICS_HEADER = [
@@ -116,6 +117,21 @@ def _count_batches_per_epoch(train_size: int, batch_size: int = 64) -> int:
     return (train_size + batch_size - 1) // batch_size
 
 
+def _load_cumulative_wall_time(checkpoint_dir: str) -> float:
+    path = os.path.join(checkpoint_dir, WALL_TIME_FILE)
+    try:
+        with open(path, "r") as f:
+            return float(f.read().strip())
+    except (FileNotFoundError, ValueError):
+        return 0.0
+
+
+def _save_cumulative_wall_time(checkpoint_dir: str, wall_time: float) -> None:
+    path = os.path.join(checkpoint_dir, WALL_TIME_FILE)
+    with open(path, "w") as f:
+        f.write(f"{wall_time:.4f}\n")
+
+
 def run_baseline_training(epochs: int = 5) -> None:
     worker_index, num_workers = _get_worker_info()
 
@@ -196,17 +212,15 @@ def run_baseline_training(epochs: int = 5) -> None:
     csv_path = _metrics_csv_path(checkpoint_dir)
     is_chief = _is_chief()
 
-    # Load the last recorded global_step and elapsed_time from a prior generation
-    # so both accumulate monotonically across elastic restarts.
+    # Load the last recorded global_step from a prior generation so it
+    # accumulates monotonically across elastic restarts.
     global_step_offset = 0
-    elapsed_time_offset = 0.0
     if is_chief and os.path.exists(csv_path):
         try:
             with open(csv_path, "r", newline="") as f:
                 rows = list(csv.DictReader(f))
             if rows:
                 global_step_offset = int(rows[-1]["global_step"])
-                elapsed_time_offset = float(rows[-1]["elapsed_time_s"])
         except Exception:
             pass
 
@@ -214,14 +228,10 @@ def run_baseline_training(epochs: int = 5) -> None:
         with open(csv_path, "w", newline="") as f:
             csv.writer(f).writerow(_METRICS_HEADER)
 
-    # Wall-clock reference for this generation (seconds since training start).
-    run_start_time = time.time()
-
-    # Epoch-level start time for per-epoch elapsed tracking.
-    epoch_start_times: dict = {}
+    prev_wall_time = _load_cumulative_wall_time(checkpoint_dir)
+    gen_start_time = time.time()
 
     def on_epoch_begin(epoch, logs=None):
-        epoch_start_times[epoch] = time.time()
         print("")
         print(f"[checkpoint] --- Epoch {epoch + 1}/{epochs} starting ---")
         print(f"[checkpoint]   Workers in cluster: {num_workers}")
@@ -234,19 +244,18 @@ def run_baseline_training(epochs: int = 5) -> None:
         val_acc = logs.get("val_accuracy", "?")
         ckpt_file = ckpt_path_template.format(epoch=epoch + 1)
 
-        # global_step = steps already done before this run
-        #             + steps completed in this run up to and including this epoch.
-        # "epoch" here is 0-indexed (Keras convention), but completed_epochs
-        # is the number of epochs already done when this generation started.
         epochs_done_this_run = (epoch + 1) - completed_epochs
         current_global_step = global_step_offset + epochs_done_this_run * steps_per_epoch
-        elapsed = elapsed_time_offset + (time.time() - run_start_time)
+        elapsed = time.time() - gen_start_time
+        cumulative_elapsed = prev_wall_time + elapsed
+
+        _save_cumulative_wall_time(checkpoint_dir, cumulative_elapsed)
 
         print("")
         print("+" * 60)
         print(f"[checkpoint] EPOCH {epoch + 1}/{epochs} COMPLETE")
         print(f"[checkpoint]   Global step:    {current_global_step}")
-        print(f"[checkpoint]   Elapsed time:   {elapsed:.1f}s")
+        print(f"[checkpoint]   Elapsed time:   {cumulative_elapsed:.1f}s")
         print(f"[checkpoint]   Train loss:     {loss}")
         print(f"[checkpoint]   Train accuracy: {acc}")
         print(f"[checkpoint]   Val loss:       {val_loss}")
@@ -258,12 +267,11 @@ def run_baseline_training(epochs: int = 5) -> None:
         print("+" * 60)
         print("")
 
-        # Write a row to the shared CSV (chief only).
         if is_chief:
             row = [
                 current_global_step,
                 epoch + 1,
-                round(elapsed, 3),
+                round(cumulative_elapsed, 3),
                 loss if isinstance(loss, float) else "",
                 acc if isinstance(acc, float) else "",
                 val_loss if isinstance(val_loss, float) else "",
@@ -283,7 +291,9 @@ def run_baseline_training(epochs: int = 5) -> None:
 
     remaining_epochs = epochs - completed_epochs
     print(f"[training] Starting training: epoch {completed_epochs + 1} to {epochs} ({remaining_epochs} epochs remaining)")
-    start_time = time.time()
+
+    if prev_wall_time > 0:
+        print(f"[training] Previous cumulative wall time: {prev_wall_time:.2f}s")
 
     history = model.fit(
         train_ds,
@@ -293,9 +303,13 @@ def run_baseline_training(epochs: int = 5) -> None:
         callbacks=[checkpoint_cb, epoch_log_cb],
     )
 
-    wall_time = time.time() - start_time
+    generation_wall_time = time.time() - gen_start_time
+    cumulative_wall_time = prev_wall_time + generation_wall_time
+    _save_cumulative_wall_time(checkpoint_dir, cumulative_wall_time)
+
     total_samples = train_size * remaining_epochs
-    throughput = total_samples / wall_time if wall_time > 0 else 0.0
+    throughput = total_samples / generation_wall_time if generation_wall_time > 0 else 0.0
+    overall_throughput = (train_size * epochs) / cumulative_wall_time if cumulative_wall_time > 0 else 0.0
 
     train_acc = history.history.get("accuracy", [None])[-1]
     val_acc = history.history.get("val_accuracy", [None])[-1]
@@ -304,8 +318,10 @@ def run_baseline_training(epochs: int = 5) -> None:
     print("=" * 60)
     print(f"[training] TRAINING COMPLETE (worker {worker_index})")
     print(f"[training]   Epochs trained:        {remaining_epochs} (epoch {completed_epochs + 1} to {epochs})")
-    print(f"[training]   Wall time:             {wall_time:.2f}s")
-    print(f"[training]   Throughput:             {throughput:.1f} samples/sec")
+    print(f"[training]   This generation time:  {generation_wall_time:.2f}s")
+    print(f"[training]   Cumulative wall time:  {cumulative_wall_time:.2f}s")
+    print(f"[training]   Generation throughput:  {throughput:.1f} samples/sec")
+    print(f"[training]   Overall throughput:     {overall_throughput:.1f} samples/sec")
     print(f"[training]   Final train accuracy:   {train_acc:.4f}" if train_acc else "[training]   Final train accuracy:   N/A")
     print(f"[training]   Final val accuracy:     {val_acc:.4f}" if val_acc else "[training]   Final val accuracy:     N/A")
     print(f"[training]   Workers in cluster:     {num_workers}")
