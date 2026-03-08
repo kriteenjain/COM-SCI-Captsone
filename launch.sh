@@ -12,7 +12,7 @@
 
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 HEARTBEAT_PORT=6000
-NUM_WORKERS=3
+NUM_WORKERS=6
 STARTUP_SLEEP=10
 EPOCHS=5
 TMPDIR_LAUNCH="/tmp/elastf_launch"

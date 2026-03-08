@@ -196,15 +196,17 @@ def run_baseline_training(epochs: int = 5) -> None:
     csv_path = _metrics_csv_path(checkpoint_dir)
     is_chief = _is_chief()
 
-    # Load the last recorded global_step from a prior generation so steps
-    # accumulate monotonically across elastic restarts.
+    # Load the last recorded global_step and elapsed_time from a prior generation
+    # so both accumulate monotonically across elastic restarts.
     global_step_offset = 0
+    elapsed_time_offset = 0.0
     if is_chief and os.path.exists(csv_path):
         try:
             with open(csv_path, "r", newline="") as f:
                 rows = list(csv.DictReader(f))
             if rows:
                 global_step_offset = int(rows[-1]["global_step"])
+                elapsed_time_offset = float(rows[-1]["elapsed_time_s"])
         except Exception:
             pass
 
@@ -238,7 +240,7 @@ def run_baseline_training(epochs: int = 5) -> None:
         # is the number of epochs already done when this generation started.
         epochs_done_this_run = (epoch + 1) - completed_epochs
         current_global_step = global_step_offset + epochs_done_this_run * steps_per_epoch
-        elapsed = time.time() - run_start_time
+        elapsed = elapsed_time_offset + (time.time() - run_start_time)
 
         print("")
         print("+" * 60)
