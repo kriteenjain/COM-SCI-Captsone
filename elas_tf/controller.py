@@ -127,7 +127,7 @@ def run_controller() -> None:
                 print("-" * 60)
                 print("")
 
-            # After the stabilization window expires, write the final survivor list.
+                                                                                    
             if stabilization_deadline > 0 and time.time() >= stabilization_deadline:
                 active_ids = sorted(known_workers.keys(), key=lambda x: int(x)) if known_workers else []
                 remaining_path = _config_dir() / REMAINING_WORKERS_FILENAME

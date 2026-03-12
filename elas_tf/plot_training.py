@@ -20,9 +20,9 @@ from pathlib import Path
 from typing import List, Dict
 
 
-# ---------------------------------------------------------------------------
-# Data loading
-# ---------------------------------------------------------------------------
+                                                                             
+              
+                                                                             
 
 CSV_FILENAME = "training_metrics.csv"
 
@@ -57,26 +57,26 @@ def _parse(rows: List[Dict]):
     return steps, epochs, times, workers, train_acc, val_acc
 
 
-# ---------------------------------------------------------------------------
-# Plotting
-# ---------------------------------------------------------------------------
+                                                                             
+          
+                                                                             
 
 def _build_fig(steps, epochs, times, workers, train_acc, val_acc):
     import matplotlib.pyplot as plt
     import matplotlib.gridspec as gridspec
     from matplotlib.lines import Line2D
 
-    # ── colour palette ──────────────────────────────────────────────────────
+                                                                              
     BG        = "#0d1117"
     PANEL     = "#161b22"
     GRID      = "#21262d"
-    ACCENT1   = "#58a6ff"   # blue  – steps vs epoch
-    ACCENT2   = "#3fb950"   # green – steps vs time
-    ACCENT3   = "#f78166"   # red   – train accuracy
-    ACCENT4   = "#d2a8ff"   # purple – val accuracy
+    ACCENT1   = "#58a6ff"                           
+    ACCENT2   = "#3fb950"                          
+    ACCENT3   = "#f78166"                           
+    ACCENT4   = "#d2a8ff"                          
     TEXT      = "#e6edf3"
     SUBTEXT   = "#8b949e"
-    MARKER    = "#ffa657"   # orange dots for scale-change events
+    MARKER    = "#ffa657"                                        
 
     plt.rcParams.update({
         "figure.facecolor":  BG,
@@ -99,7 +99,7 @@ def _build_fig(steps, epochs, times, workers, train_acc, val_acc):
     gs = gridspec.GridSpec(2, 2, figure=fig, hspace=0.45, wspace=0.35,
                            left=0.08, right=0.97, top=0.91, bottom=0.09)
 
-    # ── helper: mark scale-change events ───────────────────────────────────
+                                                                             
     def _mark_scale_changes(ax, x_vals):
         prev = workers[0] if workers else None
         for i, w in enumerate(workers):
@@ -110,7 +110,7 @@ def _build_fig(steps, epochs, times, workers, train_acc, val_acc):
                         f" ×{w}w", color=MARKER, fontsize=7, va="top")
             prev = w
 
-    # ── Plot 1: Global Step vs Epoch ────────────────────────────────────────
+                                                                              
     ax1 = fig.add_subplot(gs[0, 0])
     ax1.plot(epochs, steps, color=ACCENT1, linewidth=2, zorder=3)
     ax1.scatter(epochs, steps, color=ACCENT1, s=50, zorder=4)
@@ -120,7 +120,7 @@ def _build_fig(steps, epochs, times, workers, train_acc, val_acc):
     ax1.grid(True, linewidth=0.4)
     _mark_scale_changes(ax1, epochs)
 
-    # ── Plot 2: Global Step vs Wall Time ────────────────────────────────────
+                                                                              
     ax2 = fig.add_subplot(gs[0, 1])
     ax2.plot(times, steps, color=ACCENT2, linewidth=2, zorder=3)
     ax2.scatter(times, steps, color=ACCENT2, s=50, zorder=4)
@@ -130,7 +130,7 @@ def _build_fig(steps, epochs, times, workers, train_acc, val_acc):
     ax2.grid(True, linewidth=0.4)
     _mark_scale_changes(ax2, times)
 
-    # ── Plot 3: Training & Validation Accuracy ──────────────────────────────
+                                                                              
     ax3 = fig.add_subplot(gs[1, 0])
     clean_train = [(e, a) for e, a in zip(epochs, train_acc) if a is not None]
     clean_val   = [(e, a) for e, a in zip(epochs, val_acc)   if a is not None]
@@ -149,7 +149,7 @@ def _build_fig(steps, epochs, times, workers, train_acc, val_acc):
     ax3.grid(True, linewidth=0.4)
     ax3.set_ylim(0, 1.05)
 
-    # ── Plot 4: Steps per Epoch (throughput proxy) ──────────────────────────
+                                                                              
     ax4 = fig.add_subplot(gs[1, 1])
     if len(steps) >= 2:
         step_deltas = [steps[0]] + [steps[i] - steps[i-1] for i in range(1, len(steps))]
@@ -160,7 +160,7 @@ def _build_fig(steps, epochs, times, workers, train_acc, val_acc):
     ax4.set_title("Steps per Epoch  (cluster size changes → bar color)", fontsize=9, color=TEXT, pad=8)
     ax4.grid(True, axis="y", linewidth=0.4)
 
-    # ── legend for scale-change marker ─────────────────────────────────────
+                                                                             
     legend_els = [
         Line2D([0], [0], color=MARKER, linewidth=1.5, linestyle="--",
                label="cluster size change"),
@@ -168,7 +168,7 @@ def _build_fig(steps, epochs, times, workers, train_acc, val_acc):
     fig.legend(handles=legend_els, loc="lower right", fontsize=8,
                facecolor=PANEL, edgecolor=GRID, labelcolor=TEXT)
 
-    # ── last-row summary ────────────────────────────────────────────────────
+                                                                              
     if rows := len(steps):
         summary = (
             f"epochs={epochs[-1]}  |  global_step={steps[-1]}  |  "
@@ -179,18 +179,18 @@ def _build_fig(steps, epochs, times, workers, train_acc, val_acc):
     return fig
 
 
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
+                                                                             
+     
+                                                                             
 
 def _default_checkpoint_dir() -> str:
-    # Walk up from this script's location until we find a shared/checkpoints dir.
+                                                                                 
     here = Path(__file__).resolve().parent
     for directory in [here, here.parent, here.parent.parent]:
         candidate = directory / "shared" / "checkpoints"
         if candidate.exists():
             return str(candidate)
-    # Fall back to project root (one level above elas_tf/ package)
+                                                                  
     return str(here.parent / "shared" / "checkpoints")
 
 
@@ -231,7 +231,7 @@ def main() -> None:
         plt.show()
         return
 
-    # Live mode — update every `--interval` seconds.
+                                                    
     plt.ion()
     fig = None
     last_row_count = -1
@@ -255,7 +255,7 @@ def main() -> None:
         print("\n[plot] Stopped.")
     finally:
         if fig is not None:
-            # Save final snapshot alongside the CSV.
+                                                    
             out = csv_path.parent / "training_steps_plot.png"
             fig.savefig(out, dpi=150, bbox_inches="tight", facecolor=fig.get_facecolor())
             print(f"[plot] Final plot saved → {out}")

@@ -15,7 +15,7 @@ from .checkpointing import ensure_dir
 TOTAL_TRAIN_SAMPLES = 60000
 WALL_TIME_FILE = "cumulative_wall_time"
 
-# CSV header written once per run (chief worker only).
+                                                      
 _METRICS_HEADER = [
     "global_step",
     "epoch",
@@ -162,7 +162,7 @@ def run_baseline_training(epochs: int = 5) -> None:
         )
     print(f"[training] Model compiled under distributed strategy.")
 
-    # Restore from the latest checkpoint if one exists.
+                                                       
     latest_ckpt, completed_epochs = _find_latest_checkpoint(checkpoint_dir)
     if latest_ckpt:
         model.load_weights(latest_ckpt)
@@ -182,7 +182,7 @@ def run_baseline_training(epochs: int = 5) -> None:
 
     train_ds, test_ds, train_size = _load_mnist()
 
-    # Data sharding info.
+                         
     samples_per_worker = train_size // num_workers
     steps_per_epoch = _count_batches_per_epoch(train_size)
 
@@ -204,16 +204,16 @@ def run_baseline_training(epochs: int = 5) -> None:
         save_weights_only=True,
     )
 
-    # ------------------------------------------------------------------
-    # Metrics CSV setup (chief only — avoids races in multi-worker runs).
-    # global_step counts optimizer steps across the entire training run,
-    # including steps from previous generations (after elastic recovery).
-    # ------------------------------------------------------------------
+                                                                        
+                                                                         
+                                                                        
+                                                                         
+                                                                        
     csv_path = _metrics_csv_path(checkpoint_dir)
     is_chief = _is_chief()
 
-    # Load the last recorded global_step from a prior generation so it
-    # accumulates monotonically across elastic restarts.
+                                                                      
+                                                        
     global_step_offset = 0
     if is_chief and os.path.exists(csv_path):
         try:

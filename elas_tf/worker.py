@@ -1,11 +1,9 @@
 import json
 import os
-import socket
 import time
 from pathlib import Path
 
 from . import training
-from .heartbeat import send_join, start_heartbeat_sender
 
 
 TF_CONFIG_FILENAME = "tf_config.json"
@@ -54,8 +52,8 @@ def run_worker() -> None:
 
     host = os.getenv("WORKER_HOST", "localhost")
 
-    # Heartbeat is now handled by a separate process (heartbeat_sender.py) started
-    # by the bash wrapper, so it survives TF crashes. No in-process heartbeat here.
+                                                                                  
+                                                                                   
     print(f"[worker {worker_id}] Heartbeat handled by external process (survives TF crashes).")
 
     if startup_sleep_secs > 0:

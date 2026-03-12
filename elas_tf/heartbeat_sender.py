@@ -10,9 +10,9 @@ import socket
 import sys
 import time
 
-# Ignore all common signals so this process can ONLY be stopped by kill -9 from
-# the parent bash wrapper. This ensures it survives TF cascade crashes, stray
-# SIGINTs from Ctrl+C in other terminals, and SIGHUPs from terminal close.
+                                                                               
+                                                                             
+                                                                          
 signal.signal(signal.SIGINT, signal.SIG_IGN)
 signal.signal(signal.SIGTERM, signal.SIG_IGN)
 signal.signal(signal.SIGHUP, signal.SIG_IGN)

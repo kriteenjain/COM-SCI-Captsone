@@ -1,13 +1,3 @@
-#!/usr/bin/env bash
-# add_worker.sh — Add one or more workers to a running ElasTF cluster.
-#
-# Automatically determines the next worker IDs, creates terminals,
-# and reconfigures the cluster so all workers (old + new) train together.
-#
-# Usage:
-#   ./add_worker.sh          # add 1 worker
-#   ./add_worker.sh 3        # add 3 workers
-
 NUM_TO_ADD=${1:-1}
 
 if [ "$NUM_TO_ADD" -lt 1 ] 2>/dev/null; then
@@ -24,7 +14,6 @@ SIGNAL_DIR="$PROJECT_DIR/shared/config/signals"
 TF_CONFIG_FILE="$PROJECT_DIR/shared/config/tf_config.json"
 SCALE_UP_FILE="$PROJECT_DIR/shared/config/scale_up"
 
-# --- Determine current cluster state ---
 if [ ! -f "$TF_CONFIG_FILE" ]; then
     echo "[add_worker] No tf_config.json found. Is the cluster running?"
     exit 1
@@ -49,7 +38,6 @@ done
 CURRENT_COUNT=$(echo $CURRENT_IDS | wc -w | tr -d ' ')
 NEW_TOTAL=$((CURRENT_COUNT + NUM_TO_ADD))
 
-# Build list of new worker IDs.
 NEW_IDS=()
 for n in $(seq 1 "$NUM_TO_ADD"); do
     NEW_IDS+=($((MAX_ID + n)))
@@ -65,7 +53,6 @@ echo ""
 
 mkdir -p "$SIGNAL_DIR"
 
-# --- Create and launch a terminal for each new worker ---
 NEW_BASE_PORT=$((30000 + RANDOM % 10000))
 
 for idx in "${!NEW_IDS[@]}"; do
@@ -165,7 +152,6 @@ OUTER
     echo "[add_worker] Worker $WID terminal launched (port $WTF_PORT)"
 done
 
-# --- Wait for controller to register ALL new workers ---
 echo ""
 echo "[add_worker] Waiting for controller to register ${#NEW_IDS[@]} new worker(s)..."
 REGISTERED_ALL=0
@@ -197,7 +183,6 @@ if [ "$REGISTERED_ALL" -eq 0 ]; then
     echo "[add_worker] WARNING: Not all workers registered within 30s. Proceeding anyway."
 fi
 
-# --- Reconfigure existing workers ---
 echo ""
 echo "[add_worker] Stopping existing workers' training for reconfiguration..."
 for id in $CURRENT_IDS; do
@@ -216,7 +201,6 @@ for id in $CURRENT_IDS; do
     fi
 done
 
-# Write restart signals for existing workers.
 for id in $CURRENT_IDS; do
     cat > "$SIGNAL_DIR/restart_${id}" <<SIGEOF
 export STARTUP_SLEEP_SECS=10
@@ -224,7 +208,6 @@ SIGEOF
     echo "[add_worker]   Restart signal for worker $id"
 done
 
-# --- Notify supervisor about all new workers ---
 printf '%s\n' "${NEW_IDS[@]}" > "$SCALE_UP_FILE"
 
 echo ""

@@ -15,7 +15,7 @@ DEFAULT_HEARTBEAT_TIMEOUT_SECS = 8.0
 class HeartbeatEvent:
     """Represents a worker join or failure event observed by the controller."""
 
-    event_type: str  # "join" | "heartbeat" | "failure"
+    event_type: str                                    
     worker_id: str
     host: Optional[str] = None
     port: Optional[int] = None
@@ -137,42 +137,4 @@ class HeartbeatMonitor:
     def get_worker_states(self) -> Dict[str, WorkerHeartbeatState]:
         with self._lock:
             return dict(self._workers)
-
-
-def _send_message(controller_host: str, controller_port: int, payload: Dict) -> None:
-    try:
-        with socket.create_connection((controller_host, controller_port), timeout=2.0) as sock:
-            data = json.dumps(payload).encode("utf-8")
-            sock.sendall(data)
-    except OSError:
-        # Controller might not be up yet; best-effort only.
-        pass
-
-
-def send_join(controller_host: str, controller_port: int, worker_id: str, host: str, port: int) -> None:
-    payload = {"type": "join", "worker_id": worker_id, "host": host, "port": port}
-    _send_message(controller_host, controller_port, payload)
-
-
-def start_heartbeat_sender(
-    controller_host: str,
-    controller_port: int,
-    worker_id: str,
-    host: str,
-    port: int,
-    interval_secs: float = DEFAULT_HEARTBEAT_INTERVAL_SECS,
-) -> threading.Event:
-    """Start a background thread that periodically sends heartbeats to the controller."""
-
-    stop_event = threading.Event()
-
-    def _run() -> None:
-        while not stop_event.is_set():
-            payload = {"type": "heartbeat", "worker_id": worker_id, "host": host, "port": port}
-            _send_message(controller_host, controller_port, payload)
-            stop_event.wait(interval_secs)
-
-    thread = threading.Thread(target=_run, name=f"heartbeat-sender-{worker_id}", daemon=True)
-    thread.start()
-    return stop_event
 

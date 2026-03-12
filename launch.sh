@@ -1,18 +1,6 @@
-#!/usr/bin/env bash
-# launch.sh — Elastic supervisor for ElasTF.
-#
-# Heartbeat-based failure detection. When a worker is killed, TF crashes all
-# workers (collective failure). The controller detects the failure via heartbeat
-# timeout. The supervisor reads killed_count (written by kill_workers.sh or
-# Ctrl+C trap) and restarts (ACTIVE - killed) workers in the same terminals.
-#
-# Usage:
-#   chmod +x launch.sh
-#   ./launch.sh
-
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 HEARTBEAT_PORT=6000
-NUM_WORKERS=6
+NUM_WORKERS=3
 STARTUP_SLEEP=10
 EPOCHS=5
 TMPDIR_LAUNCH="/tmp/elastf_launch"
@@ -33,7 +21,6 @@ mkdir -p "$PROJECT_DIR/shared/checkpoints" "$PROJECT_DIR/shared/config" "$SIGNAL
 rm -rf "$TMPDIR_LAUNCH"
 mkdir -p "$TMPDIR_LAUNCH"
 
-# --- Write the controller script ---
 cat > "$TMPDIR_LAUNCH/controller.sh" <<EOF
 #!/usr/bin/env bash
 cd "$PROJECT_DIR"
@@ -47,7 +34,6 @@ exec python3 -m elas_tf.controller
 EOF
 chmod +x "$TMPDIR_LAUNCH/controller.sh"
 
-# --- Open controller Terminal ---
 echo "[supervisor] Starting controller..."
 open -a Terminal "$TMPDIR_LAUNCH/controller.sh"
 sleep 3
@@ -59,7 +45,6 @@ else
     echo "[supervisor] Controller started."
 fi
 
-# --- Trap Ctrl-C ---
 cleanup() {
     echo ""
     echo "[supervisor] Shutting down..."
@@ -72,7 +57,6 @@ cleanup() {
 }
 trap cleanup INT TERM
 
-# --- Launch worker terminals (once — they loop internally) ---
 ACTIVE_WORKERS=$NUM_WORKERS
 BASE_PORT=$((30000 + RANDOM % 10000))
 
@@ -87,9 +71,6 @@ for i in $(seq 0 $((ACTIVE_WORKERS - 1))); do
     PIDFILE="$TMPDIR_LAUNCH/worker_${i}.pid"
     SCRIPT="$TMPDIR_LAUNCH/worker_${i}.sh"
 
-    # Worker script: runs heartbeat as a SEPARATE process (survives TF crashes).
-    # When python crashes (TF cascade), heartbeat keeps running → controller still
-    # sees this worker alive. Only when bash exits (Ctrl+C/removed) does heartbeat stop.
     cat > "$SCRIPT" <<OUTER
 #!/usr/bin/env bash
 cd "$PROJECT_DIR"
@@ -184,9 +165,7 @@ OUTER
     echo "[supervisor] Opened Terminal for worker $i (port $TF_PORT)"
 done
 
-# --- Main supervisor loop ---
 GENERATION=0
-# Track which worker IDs are alive (by original index, e.g. 0 1 2).
 ALIVE_IDS=()
 for i in $(seq 0 $((ACTIVE_WORKERS - 1))); do
     ALIVE_IDS+=("$i")
@@ -195,7 +174,6 @@ done
 while true; do
     GENERATION=$((GENERATION + 1))
 
-    # Wait for PID files — use ALIVE_IDS (not 0..N-1) to read correct PID files.
     echo "[supervisor] Waiting for worker PIDs..."
     sleep 4
 
@@ -213,11 +191,9 @@ while true; do
         fi
     done
 
-    # Write current PIDs so kill_workers.sh can use them.
     WORKER_PIDS_FILE="$PROJECT_DIR/shared/config/worker_pids"
     printf '%s\n' "${WORKER_PIDS[@]}" > "$WORKER_PIDS_FILE"
 
-    # Clear remaining_workers from previous generation.
     rm -f "$REMAINING_FILE"
 
     echo ""
@@ -233,7 +209,6 @@ while true; do
     echo "[supervisor] Heartbeat timeout is 8s — controller will detect failures after that."
     echo ""
 
-    # Wait for a worker PID to exit OR a scale-up signal.
     EXITED_PID=""
     SCALED_UP=0
     while [ -z "$EXITED_PID" ] && [ "$SCALED_UP" -eq 0 ]; do
@@ -267,11 +242,9 @@ while true; do
     echo ""
     echo "[supervisor] Worker exit detected (pid=$EXITED_PID)."
 
-    # Check if training completed (workers write this marker on exit code 0).
     TRAINING_DONE_FILE="$PROJECT_DIR/shared/config/training_done"
     sleep 2
     if [ -f "$TRAINING_DONE_FILE" ]; then
-        # Wait for ALL workers to finish before declaring done.
         echo "[supervisor] Training done marker found. Waiting for all workers to finish..."
         sleep 5
         echo ""
@@ -283,7 +256,6 @@ while true; do
 
     echo "[supervisor] Waiting for controller to detect failure via heartbeat timeout..."
 
-    # Poll for the controller's remaining_workers file.
     WAIT_LIMIT=25
     WAITED=0
     while [ ! -f "$REMAINING_FILE" ] && [ $WAITED -lt $WAIT_LIMIT ]; do
@@ -292,7 +264,6 @@ while true; do
         echo "[supervisor]   ... waiting for controller ($WAITED/${WAIT_LIMIT}s)"
     done
 
-    # Read surviving worker IDs from controller.
     SURVIVOR_IDS=()
     if [ -f "$REMAINING_FILE" ]; then
         while IFS= read -r line || [ -n "$line" ]; do
@@ -313,8 +284,6 @@ while true; do
     echo "[supervisor] ELASTIC RECOVERY: restarting ${#SURVIVOR_IDS[@]} worker(s): ${SURVIVOR_IDS[*]}"
     echo "============================================================"
 
-    # Write restart signals for surviving workers (keep their current ports —
-    # the old python processes are dead so ports are freed).
     ALIVE_IDS=()
     for i in "${SURVIVOR_IDS[@]}"; do
         cat > "$SIGNAL_DIR/restart_${i}" <<SIGEOF
@@ -329,7 +298,6 @@ SIGEOF
     echo ""
 done
 
-# Clean up.
 pkill -9 -f "elas_tf.controller" 2>/dev/null
 pkill -9 -f "elas_tf.heartbeat_sender" 2>/dev/null
 rm -rf "$TMPDIR_LAUNCH"
