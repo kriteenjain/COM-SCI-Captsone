@@ -31,7 +31,6 @@ _METRICS_HEADER = [
 
 
 def _metrics_csv_path(checkpoint_dir: str) -> str:
-    """Shared CSV file written by the chief worker for live plotting."""
     return os.path.join(checkpoint_dir, "training_metrics.csv")
 
 
@@ -113,7 +112,6 @@ def _find_latest_checkpoint(checkpoint_dir: str) -> Tuple[Optional[str], int]:
 
 
 def _count_batches_per_epoch(train_size: int, batch_size: int = 64) -> int:
-    """Number of gradient steps (batches) per epoch."""
     return (train_size + batch_size - 1) // batch_size
 
 

@@ -4,7 +4,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from queue import Queue, Empty
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 
 DEFAULT_HEARTBEAT_INTERVAL_SECS = 2.0
@@ -13,7 +13,6 @@ DEFAULT_HEARTBEAT_TIMEOUT_SECS = 8.0
 
 @dataclass
 class HeartbeatEvent:
-    """Represents a worker join or failure event observed by the controller."""
 
     event_type: str                                    
     worker_id: str
@@ -31,7 +30,6 @@ class WorkerHeartbeatState:
 
 
 class HeartbeatMonitor:
-    """Controller-side heartbeat listener and failure detector."""
 
     def __init__(self, host: str = "0.0.0.0", port: int = 5000, timeout_secs: float = DEFAULT_HEARTBEAT_TIMEOUT_SECS) -> None:
         self._host = host
@@ -123,7 +121,6 @@ class HeartbeatMonitor:
         return items
 
     def detect_failures(self) -> List[HeartbeatEvent]:
-        """Return newly detected worker failures based on heartbeat timeout."""
         now = time.time()
         failures: List[HeartbeatEvent] = []
         with self._lock:

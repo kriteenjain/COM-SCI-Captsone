@@ -45,12 +45,7 @@ def _load_tf_config_for_worker(worker_id: str) -> tuple[str | None, int]:
 
 def run_worker() -> None:
     worker_id = os.getenv("WORKER_ID", "0")
-    controller_host = os.getenv("CONTROLLER_HOST", "controller")
-    heartbeat_port = int(os.getenv("HEARTBEAT_PORT", "5000"))
     startup_sleep_secs = float(os.getenv("STARTUP_SLEEP_SECS", "20"))
-    tf_port = int(os.getenv("TF_PORT", "12345"))
-
-    host = os.getenv("WORKER_HOST", "localhost")
 
                                                                                   
                                                                                    

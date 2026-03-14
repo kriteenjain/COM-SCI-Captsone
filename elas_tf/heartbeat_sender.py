@@ -1,9 +1,3 @@
-"""Standalone heartbeat sender — runs as a separate process so it survives TF crashes.
-
-Usage:
-    python3 -m elas_tf.heartbeat_sender <controller_host> <controller_port> \
-        <worker_id> <worker_host> <worker_port> [interval_secs]
-"""
 import json
 import signal
 import socket
