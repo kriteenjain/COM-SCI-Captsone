@@ -1,4 +1,4 @@
-# ElasTF
+# COM SCI Capstone — ElasTF
 
 Elastic distributed training with TensorFlow for CS 214.
 
