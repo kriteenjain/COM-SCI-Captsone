@@ -35,7 +35,8 @@ cd /opt/elastf/ElasTF
 # Set up venv
 python3 -m venv /opt/elastf_venv
 source /opt/elastf_venv/bin/activate
-pip install --quiet -r requirements.txt
+pip install --quiet --upgrade pip
+pip install --quiet flask requests google-cloud-storage numpy grpcio protobuf
 
 # Create local dirs for backward compatibility
 mkdir -p shared/config shared/checkpoints
@@ -48,5 +49,5 @@ export HTTP_PORT=8080
 export GCS_BUCKET="$GCS_BUCKET"
 
 echo "[startup] Starting controller (heartbeat=5000, http=8080)..."
-nohup python3 -m elas_tf.controller >> /var/log/elastf.log 2>&1 &
+nohup /opt/elastf_venv/bin/python3 -m elas_tf.controller >> /var/log/elastf.log 2>&1 &
 echo "[startup] Controller started (pid=$!)"

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # GCP VM startup script for an ElasTF worker.
-# Runs automatically when the VM boots (Deep Learning VM image).
+# Works on both CPU-only (Debian) and GPU (Deep Learning) VMs.
 #
 set -euo pipefail
 exec > >(tee -a /var/log/elastf.log) 2>&1
@@ -34,7 +34,11 @@ if [ -z "$CONTROLLER_IP" ]; then
     exit 1
 fi
 
-# Clone repo (Deep Learning VM already has Python, TF, CUDA)
+# Install system dependencies
+apt-get update -qq
+apt-get install -y -qq git python3-pip python3-venv
+
+# Clone repo
 if [ -d /opt/elastf ]; then
     cd /opt/elastf && git pull origin "$BRANCH"
 else
@@ -42,8 +46,19 @@ else
 fi
 cd /opt/elastf/ElasTF
 
-# Install additional Python dependencies
-pip install --quiet requests flask google-cloud-storage
+# Set up venv and install Python dependencies
+python3 -m venv /opt/elastf_venv
+source /opt/elastf_venv/bin/activate
+pip install --quiet --upgrade pip
+pip install --quiet tensorflow==2.15.0 requests flask google-cloud-storage numpy grpcio protobuf
+
+# Check for GPU
+if command -v nvidia-smi &>/dev/null && nvidia-smi &>/dev/null; then
+    echo "[startup] GPU detected:"
+    nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
+else
+    echo "[startup] No GPU detected. Running CPU-only training."
+fi
 
 # Start worker entrypoint
 export WORKER_ID="$WORKER_ID"
@@ -57,5 +72,5 @@ export GCS_BUCKET="$GCS_BUCKET"
 export EPOCHS=10
 
 echo "[startup] Starting worker entrypoint (worker_id=$WORKER_ID, tf_port=$TF_PORT)..."
-nohup python3 -m elas_tf.worker_entrypoint >> /var/log/elastf.log 2>&1 &
+nohup /opt/elastf_venv/bin/python3 -m elas_tf.worker_entrypoint >> /var/log/elastf.log 2>&1 &
 echo "[startup] Worker entrypoint started (pid=$!)"
