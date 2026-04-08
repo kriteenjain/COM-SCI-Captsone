@@ -11,10 +11,10 @@ import tensorflow as tf
 
 from .checkpointing import ensure_dir
 
-TOTAL_TRAIN_SAMPLES = 60000
+TOTAL_TRAIN_SAMPLES = 50000
+BATCH_SIZE = 128
 WALL_TIME_FILE = "cumulative_wall_time"
 
-                                                      
 _METRICS_HEADER = [
     "global_step",
     "epoch",
@@ -33,33 +33,23 @@ def _metrics_csv_path(checkpoint_dir: str) -> str:
     return os.path.join(checkpoint_dir, "training_metrics.csv")
 
 
-def _load_mnist() -> Tuple[tf.data.Dataset, tf.data.Dataset, int]:
-    (x_train, y_train), (x_test, y_test) = tf.keras.datasets.mnist.load_data()
+def _load_cifar10() -> Tuple[tf.data.Dataset, tf.data.Dataset, int]:
+    (x_train, y_train), (x_test, y_test) = tf.keras.datasets.cifar10.load_data()
     x_train = x_train.astype("float32") / 255.0
     x_test = x_test.astype("float32") / 255.0
-
-    x_train = np.expand_dims(x_train, -1)
-    x_test = np.expand_dims(x_test, -1)
 
     train_ds = tf.data.Dataset.from_tensor_slices((x_train, y_train))
     test_ds = tf.data.Dataset.from_tensor_slices((x_test, y_test))
 
-    batch_size = 64
-    train_ds = train_ds.shuffle(10000).batch(batch_size)
-    test_ds = test_ds.batch(batch_size)
+    train_ds = train_ds.shuffle(10000).batch(BATCH_SIZE)
+    test_ds = test_ds.batch(BATCH_SIZE)
     train_size = x_train.shape[0]
     return train_ds, test_ds, int(train_size)
 
 
 def _build_model() -> tf.keras.Model:
-    return tf.keras.Sequential(
-        [
-            tf.keras.layers.Conv2D(32, 3, activation="relu", input_shape=(28, 28, 1)),
-            tf.keras.layers.MaxPool2D(),
-            tf.keras.layers.Flatten(),
-            tf.keras.layers.Dense(128, activation="relu"),
-            tf.keras.layers.Dense(10, activation="softmax"),
-        ]
+    return tf.keras.applications.ResNet50(
+        weights=None, input_shape=(32, 32, 3), classes=10
     )
 
 
@@ -109,7 +99,7 @@ def _find_latest_checkpoint(checkpoint_dir: str) -> Tuple[Optional[str], int]:
     return best_path, best_epoch
 
 
-def _count_batches_per_epoch(train_size: int, batch_size: int = 64) -> int:
+def _count_batches_per_epoch(train_size: int, batch_size: int = BATCH_SIZE) -> int:
     return (train_size + batch_size - 1) // batch_size
 
 
@@ -128,12 +118,51 @@ def _save_cumulative_wall_time(checkpoint_dir: str, wall_time: float) -> None:
         f.write(f"{wall_time:.4f}\n")
 
 
+def _maybe_upload_checkpoint_to_gcs(checkpoint_dir: str) -> None:
+    """If GCS_BUCKET is set, upload checkpoint files after each epoch."""
+    bucket_name = os.getenv("GCS_BUCKET")
+    if not bucket_name:
+        return
+    try:
+        from .gcs_storage import upload_checkpoint
+        upload_checkpoint(checkpoint_dir, bucket_name, "checkpoints")
+        print(f"[training] Checkpoint uploaded to gs://{bucket_name}/checkpoints/")
+    except Exception as e:
+        print(f"[training] WARNING: GCS upload failed: {e}")
+
+
+def _maybe_download_checkpoint_from_gcs(checkpoint_dir: str) -> None:
+    """If GCS_BUCKET is set, download latest checkpoint before training."""
+    bucket_name = os.getenv("GCS_BUCKET")
+    if not bucket_name:
+        return
+    try:
+        from .gcs_storage import download_latest_checkpoint
+        download_latest_checkpoint(bucket_name, "checkpoints", checkpoint_dir)
+        print(f"[training] Checkpoint downloaded from gs://{bucket_name}/checkpoints/")
+    except Exception as e:
+        print(f"[training] WARNING: GCS download failed: {e}")
+
+
+def _maybe_upload_metrics_to_gcs(csv_path: str) -> None:
+    """If GCS_BUCKET is set, upload metrics CSV after each epoch."""
+    bucket_name = os.getenv("GCS_BUCKET")
+    if not bucket_name:
+        return
+    try:
+        from .gcs_storage import upload_file
+        upload_file(csv_path, bucket_name, "metrics/training_metrics.csv")
+    except Exception as e:
+        print(f"[training] WARNING: GCS metrics upload failed: {e}")
+
+
 def run_baseline_training(epochs: int = 5) -> None:
     worker_index, num_workers = _get_worker_info()
 
     print("")
     print("=" * 60)
     print(f"[training] WORKER {worker_index} of {num_workers} starting up")
+    print(f"[training] Model: ResNet-50 on CIFAR-10 ({TOTAL_TRAIN_SAMPLES} samples)")
     print("=" * 60)
 
     tf_config = os.getenv("TF_CONFIG")
@@ -146,6 +175,8 @@ def run_baseline_training(epochs: int = 5) -> None:
     checkpoint_dir = os.getenv("CHECKPOINT_DIR", "/shared/checkpoints")
     ensure_dir(checkpoint_dir)
 
+    _maybe_download_checkpoint_from_gcs(checkpoint_dir)
+
     print(f"[training] Setting up MultiWorkerMirroredStrategy...")
     strategy = _get_strategy()
 
@@ -157,8 +188,8 @@ def run_baseline_training(epochs: int = 5) -> None:
             metrics=["accuracy"],
         )
     print(f"[training] Model compiled under distributed strategy.")
+    print(f"[training] Model parameters: {model.count_params():,}")
 
-                                                       
     latest_ckpt, completed_epochs = _find_latest_checkpoint(checkpoint_dir)
     if latest_ckpt:
         model.load_weights(latest_ckpt)
@@ -176,9 +207,8 @@ def run_baseline_training(epochs: int = 5) -> None:
         print(f"[training] Already completed all {epochs} epochs. Nothing to do.")
         return
 
-    train_ds, test_ds, train_size = _load_mnist()
+    train_ds, test_ds, train_size = _load_cifar10()
 
-                         
     samples_per_worker = train_size // num_workers
     steps_per_epoch = _count_batches_per_epoch(train_size)
 
@@ -189,6 +219,7 @@ def run_baseline_training(epochs: int = 5) -> None:
     print(f"[training]   Number of workers:      {num_workers}")
     print(f"[training]   Samples per worker:     ~{samples_per_worker}")
     print(f"[training]   This worker (index {worker_index}) processes ~{samples_per_worker} samples/epoch")
+    print(f"[training]   Batch size:             {BATCH_SIZE}")
     print(f"[training]   Steps per epoch:        {steps_per_epoch}")
     print("-" * 60)
     print("")
@@ -200,16 +231,9 @@ def run_baseline_training(epochs: int = 5) -> None:
         save_weights_only=True,
     )
 
-                                                                        
-                                                                         
-                                                                        
-                                                                         
-                                                                        
     csv_path = _metrics_csv_path(checkpoint_dir)
     is_chief = _is_chief()
 
-                                                                      
-                                                        
     global_step_offset = 0
     if is_chief and os.path.exists(csv_path):
         try:
@@ -278,7 +302,10 @@ def run_baseline_training(epochs: int = 5) -> None:
             ]
             with open(csv_path, "a", newline="") as f:
                 csv.writer(f).writerow(row)
-            print(f"[metrics]  Row appended → {csv_path}")
+            print(f"[metrics]  Row appended -> {csv_path}")
+
+            _maybe_upload_checkpoint_to_gcs(checkpoint_dir)
+            _maybe_upload_metrics_to_gcs(csv_path)
 
     epoch_log_cb = tf.keras.callbacks.LambdaCallback(
         on_epoch_begin=on_epoch_begin,
@@ -313,6 +340,7 @@ def run_baseline_training(epochs: int = 5) -> None:
     print("")
     print("=" * 60)
     print(f"[training] TRAINING COMPLETE (worker {worker_index})")
+    print(f"[training]   Model:                 ResNet-50 on CIFAR-10")
     print(f"[training]   Epochs trained:        {remaining_epochs} (epoch {completed_epochs + 1} to {epochs})")
     print(f"[training]   This generation time:  {generation_wall_time:.2f}s")
     print(f"[training]   Cumulative wall time:  {cumulative_wall_time:.2f}s")
@@ -331,7 +359,7 @@ def _get_strategy() -> tf.distribute.Strategy:
 
 
 def main() -> None:
-    epochs = int(os.getenv("EPOCHS", "3"))
+    epochs = int(os.getenv("EPOCHS", "10"))
     run_baseline_training(epochs=epochs)
 
 
