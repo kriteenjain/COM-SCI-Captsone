@@ -30,7 +30,7 @@ if [ -d /opt/elastf ]; then
 else
     git clone --branch "$BRANCH" "$REPO_URL" /opt/elastf
 fi
-cd /opt/elastf/ElasTF
+cd /opt/elastf
 
 # Set up venv
 python3 -m venv /opt/elastf_venv
