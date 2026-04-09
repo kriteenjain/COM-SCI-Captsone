@@ -105,7 +105,7 @@ for vm in $CURRENT_WORKERS; do
     WID=$(echo "$vm" | sed 's/elastf-worker-//')
     echo "[scale-up]   Sending SIGUSR1 to entrypoint on $vm (triggers restart)..."
     gcloud compute ssh "$vm" --zone="$ZONE" \
-        --command="EPID=\$(cat /tmp/elastf_entrypoint.pid 2>/dev/null); [ -n \"\$EPID\" ] && kill -USR1 \$EPID && echo 'Sent SIGUSR1 to entrypoint pid='\$EPID || echo 'No PID file found'" 2>/dev/null || true
+        --command='sudo kill -USR1 $(cat /tmp/elastf_entrypoint.pid 2>/dev/null) 2>/dev/null && echo "Sent SIGUSR1" || echo "Failed to send signal"' 2>/dev/null || true
 done
 
 echo ""
