@@ -13,8 +13,28 @@ from typing import Optional
 from google.cloud import storage
 
 
+def _get_project() -> Optional[str]:
+    """Resolve GCP project from env or GCE metadata server."""
+    project = os.getenv("GOOGLE_CLOUD_PROJECT") or os.getenv("GCLOUD_PROJECT")
+    if project:
+        return project
+    try:
+        import requests
+        resp = requests.get(
+            "http://metadata.google.internal/computeMetadata/v1/project/project-id",
+            headers={"Metadata-Flavor": "Google"},
+            timeout=2,
+        )
+        if resp.status_code == 200:
+            return resp.text.strip()
+    except Exception:
+        pass
+    return None
+
+
 def _get_client() -> storage.Client:
-    return storage.Client()
+    project = _get_project()
+    return storage.Client(project=project) if project else storage.Client()
 
 
 def upload_checkpoint(local_dir: str, bucket_name: str, prefix: str) -> None:
