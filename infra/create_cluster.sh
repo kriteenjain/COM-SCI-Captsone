@@ -89,7 +89,7 @@ for i in $(seq 0 $((NUM_WORKERS - 1))); do
             --maintenance-policy=TERMINATE \
             --tags=elastf-worker \
             --scopes=storage-full \
-            --metadata="worker_id=${i},controller_ip=${CONTROLLER_IP},tf_port=${TF_PORT},repo_url=${REPO_URL},branch=${BRANCH},gcs_bucket=${BUCKET},epochs=${EPOCHS},light_model=${LIGHT_MODEL}" \
+            --metadata="worker_id=${i},controller_ip=${CONTROLLER_IP},tf_port=${TF_PORT},repo_url=${REPO_URL},branch=${BRANCH},gcs_bucket=${BUCKET},epochs=${EPOCHS},light_model=${LIGHT_MODEL},expected_workers=${NUM_WORKERS}" \
             --metadata-from-file=startup-script="${SCRIPT_DIR}/worker_startup.sh" \
             --quiet &
     else
@@ -100,7 +100,7 @@ for i in $(seq 0 $((NUM_WORKERS - 1))); do
             --image-project=debian-cloud \
             --tags=elastf-worker \
             --scopes=storage-full \
-            --metadata="worker_id=${i},controller_ip=${CONTROLLER_IP},tf_port=${TF_PORT},repo_url=${REPO_URL},branch=${BRANCH},gcs_bucket=${BUCKET},epochs=${EPOCHS},light_model=${LIGHT_MODEL}" \
+            --metadata="worker_id=${i},controller_ip=${CONTROLLER_IP},tf_port=${TF_PORT},repo_url=${REPO_URL},branch=${BRANCH},gcs_bucket=${BUCKET},epochs=${EPOCHS},light_model=${LIGHT_MODEL},expected_workers=${NUM_WORKERS}" \
             --metadata-from-file=startup-script="${SCRIPT_DIR}/worker_startup.sh" \
             --quiet &
     fi

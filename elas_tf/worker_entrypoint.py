@@ -47,9 +47,18 @@ def _wait_for_controller(controller_url: str, timeout: int = 120) -> bool:
     return False
 
 
-def _wait_for_stable_cluster(controller_url: str, stability_secs: int = 15, timeout: int = 180) -> int:
-    """Wait until the cluster generation stabilizes (no new joins for stability_secs)."""
-    print(f"[entrypoint] Waiting for cluster to stabilize ({stability_secs}s of no changes)...")
+def _wait_for_stable_cluster(
+    controller_url: str,
+    expected_workers: int = 0,
+    stability_secs: int = 15,
+    timeout: int = 300,
+) -> int:
+    """Wait until expected workers have registered, then wait for stability."""
+    if expected_workers > 0:
+        print(f"[entrypoint] Waiting for {expected_workers} worker(s) to register...")
+    else:
+        print(f"[entrypoint] Waiting for cluster to stabilize ({stability_secs}s of no changes)...")
+
     deadline = time.time() + timeout
     last_gen = -1
     last_change = time.time()
@@ -64,15 +73,20 @@ def _wait_for_stable_cluster(controller_url: str, stability_secs: int = 15, time
                 if gen != last_gen:
                     last_gen = gen
                     last_change = time.time()
-                    print(f"[entrypoint]   Generation {gen}, {num} worker(s) — waiting for stability...")
-                elif num > 0 and (time.time() - last_change) >= stability_secs:
+                    print(f"[entrypoint]   Generation {gen}, {num} worker(s)...")
+
+                if expected_workers > 0 and num >= expected_workers:
+                    print(f"[entrypoint]   All {num} expected worker(s) registered!")
+                    time.sleep(5)
+                    return gen
+                elif expected_workers == 0 and num > 0 and (time.time() - last_change) >= stability_secs:
                     print(f"[entrypoint]   Cluster stable: generation {gen}, {num} worker(s)")
                     return gen
         except Exception:
             pass
-        time.sleep(2)
+        time.sleep(3)
 
-    print(f"[entrypoint]   Timed out waiting for stable cluster, proceeding with current config")
+    print(f"[entrypoint]   Timed out, proceeding with current config")
     return last_gen
 
 
@@ -117,6 +131,7 @@ def main() -> None:
     epochs = os.getenv("EPOCHS", "10")
     checkpoint_dir = os.getenv("CHECKPOINT_DIR", "/tmp/elastf_checkpoints")
     gcs_bucket = os.getenv("GCS_BUCKET", "")
+    expected_workers = int(os.getenv("EXPECTED_WORKERS", "0"))
 
     controller_url = os.getenv(
         "CONTROLLER_URL", f"http://{controller_host}:{http_port}"
@@ -160,7 +175,12 @@ def main() -> None:
         print(f"\n[entrypoint] === Generation {generation} ===")
 
         if generation == 1:
-            _wait_for_stable_cluster(controller_url, stability_secs=15, timeout=180)
+            _wait_for_stable_cluster(
+                controller_url,
+                expected_workers=expected_workers,
+                stability_secs=15,
+                timeout=300,
+            )
         else:
             print(f"[entrypoint] Sleeping 10s for restart stabilization...")
             time.sleep(10)

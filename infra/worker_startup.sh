@@ -26,6 +26,8 @@ EPOCHS=$(curl -sf -H "Metadata-Flavor: Google" \
     "http://metadata.google.internal/computeMetadata/v1/instance/attributes/epochs" || echo "10")
 LIGHT_MODEL=$(curl -sf -H "Metadata-Flavor: Google" \
     "http://metadata.google.internal/computeMetadata/v1/instance/attributes/light_model" || echo "0")
+EXPECTED_WORKERS=$(curl -sf -H "Metadata-Flavor: Google" \
+    "http://metadata.google.internal/computeMetadata/v1/instance/attributes/expected_workers" || echo "0")
 
 echo "[startup] Worker ID: $WORKER_ID"
 echo "[startup] Controller IP: $CONTROLLER_IP"
@@ -78,6 +80,7 @@ export CHECKPOINT_DIR="/tmp/elastf_checkpoints"
 export GCS_BUCKET="$GCS_BUCKET"
 export EPOCHS="$EPOCHS"
 export LIGHT_MODEL="$LIGHT_MODEL"
+export EXPECTED_WORKERS="$EXPECTED_WORKERS"
 
 echo "[startup] Starting worker entrypoint (worker_id=$WORKER_ID, tf_port=$TF_PORT)..."
 nohup /opt/elastf_venv/bin/python3 -m elas_tf.worker_entrypoint >> /var/log/elastf.log 2>&1 &
