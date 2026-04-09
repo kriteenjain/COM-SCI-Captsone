@@ -260,7 +260,14 @@ def run_baseline_training(epochs: int = 5) -> None:
         with open(csv_path, "w", newline="") as f:
             csv.writer(f).writerow(_METRICS_HEADER)
 
-    prev_wall_time = _load_cumulative_wall_time(checkpoint_dir)
+    real_start_file = os.path.join(checkpoint_dir, "real_start_time")
+    try:
+        with open(real_start_file, "r") as f:
+            real_start_time = float(f.read().strip())
+        prev_wall_time = time.time() - real_start_time
+        print(f"[training] Using real wall clock: {prev_wall_time:.1f}s since entrypoint start (includes restart overhead)")
+    except (FileNotFoundError, ValueError):
+        prev_wall_time = _load_cumulative_wall_time(checkpoint_dir)
     gen_start_time = time.time()
 
     def on_epoch_begin(epoch, logs=None):

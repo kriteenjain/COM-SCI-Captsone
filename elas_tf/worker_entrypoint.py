@@ -158,6 +158,12 @@ def main() -> None:
 
     os.makedirs(checkpoint_dir, exist_ok=True)
 
+    real_start_file = os.path.join(checkpoint_dir, "real_start_time")
+    if not os.path.exists(real_start_file):
+        with open(real_start_file, "w") as f:
+            f.write(f"{time.time():.4f}\n")
+        print(f"[entrypoint] Recorded real start time")
+
     hb_proc = subprocess.Popen(
         [
             sys.executable, "-m", "elas_tf.heartbeat_sender",
