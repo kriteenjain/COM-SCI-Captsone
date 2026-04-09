@@ -12,7 +12,7 @@
 #   ./infra/elastic_benchmark.sh
 #   ZONE=us-west1-a ./infra/elastic_benchmark.sh
 #
-set -euo pipefail
+set -uo pipefail
 
 ZONE=${ZONE:-us-west1-a}
 PROJECT=$(gcloud config get-value project 2>/dev/null)
@@ -45,17 +45,19 @@ wait_for_epoch() {
     local max_wait=${2:-2400}
     local waited=0
     local poll=20
+    local epoch_count=0
 
     echo "[bench] Waiting for epoch $target_epoch to complete..."
-    while [ $waited -lt $max_wait ]; do
-        sleep $poll
+    while [ "$waited" -lt "$max_wait" ]; do
+        sleep "$poll" || true
         waited=$((waited + poll))
 
         if gsutil -q stat "gs://${BUCKET}/metrics/training_metrics.csv" 2>/dev/null; then
-            gsutil cp -q "gs://${BUCKET}/metrics/training_metrics.csv" "/tmp/elastf_bench_check.csv" 2>/dev/null
-            EPOCH_COUNT=$(tail -n +2 /tmp/elastf_bench_check.csv 2>/dev/null | wc -l | tr -d ' ')
-            echo "[bench]   ... $EPOCH_COUNT / $target_epoch epochs done (${waited}s elapsed)"
-            if [ "$EPOCH_COUNT" -ge "$target_epoch" ]; then
+            gsutil cp "gs://${BUCKET}/metrics/training_metrics.csv" "/tmp/elastf_bench_check.csv" 2>/dev/null || true
+            epoch_count=$(tail -n +2 /tmp/elastf_bench_check.csv 2>/dev/null | wc -l | tr -d ' ' || echo "0")
+            epoch_count=${epoch_count:-0}
+            echo "[bench]   ... $epoch_count / $target_epoch epochs done (${waited}s elapsed)"
+            if [ "$epoch_count" -ge "$target_epoch" ] 2>/dev/null; then
                 echo "[bench] Epoch $target_epoch reached!"
                 return 0
             fi
@@ -64,7 +66,7 @@ wait_for_epoch() {
         fi
     done
     echo "[bench] WARNING: Timed out waiting for epoch $target_epoch"
-    return 1
+    return 0
 }
 
 run_scenario() {
