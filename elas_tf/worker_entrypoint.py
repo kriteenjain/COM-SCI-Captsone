@@ -47,6 +47,35 @@ def _wait_for_controller(controller_url: str, timeout: int = 120) -> bool:
     return False
 
 
+def _wait_for_stable_cluster(controller_url: str, stability_secs: int = 15, timeout: int = 180) -> int:
+    """Wait until the cluster generation stabilizes (no new joins for stability_secs)."""
+    print(f"[entrypoint] Waiting for cluster to stabilize ({stability_secs}s of no changes)...")
+    deadline = time.time() + timeout
+    last_gen = -1
+    last_change = time.time()
+
+    while time.time() < deadline:
+        try:
+            resp = requests.get(f"{controller_url}/config/generation", timeout=3)
+            if resp.status_code == 200:
+                data = resp.json()
+                gen = data.get("generation", 0)
+                num = data.get("num_workers", 0)
+                if gen != last_gen:
+                    last_gen = gen
+                    last_change = time.time()
+                    print(f"[entrypoint]   Generation {gen}, {num} worker(s) — waiting for stability...")
+                elif num > 0 and (time.time() - last_change) >= stability_secs:
+                    print(f"[entrypoint]   Cluster stable: generation {gen}, {num} worker(s)")
+                    return gen
+        except Exception:
+            pass
+        time.sleep(2)
+
+    print(f"[entrypoint]   Timed out waiting for stable cluster, proceeding with current config")
+    return last_gen
+
+
 def _poll_restart_signal(controller_url: str, worker_id: str, timeout: int = 120) -> bool:
     """Poll the controller for a restart signal."""
     print(f"[entrypoint] Polling for restart signal (worker {worker_id})...")
@@ -130,9 +159,11 @@ def main() -> None:
         generation += 1
         print(f"\n[entrypoint] === Generation {generation} ===")
 
-        startup_sleep = 15 if generation == 1 else 10
-        print(f"[entrypoint] Sleeping {startup_sleep}s for worker registration...")
-        time.sleep(startup_sleep)
+        if generation == 1:
+            _wait_for_stable_cluster(controller_url, stability_secs=15, timeout=180)
+        else:
+            print(f"[entrypoint] Sleeping 10s for restart stabilization...")
+            time.sleep(10)
 
         env = os.environ.copy()
         env["WORKER_ID"] = worker_id
