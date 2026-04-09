@@ -10,8 +10,10 @@
 set -euo pipefail
 
 NUM_WORKERS=${1:-4}
-ZONE=${ZONE:-us-central1-c}
+ZONE=${ZONE:-us-west1-a}
 USE_GPU=${USE_GPU:-0}
+EPOCHS=${EPOCHS:-10}
+LIGHT_MODEL=${LIGHT_MODEL:-0}
 PROJECT=$(gcloud config get-value project 2>/dev/null)
 BUCKET="elastf-checkpoints-${PROJECT}"
 REPO_URL="https://github.com/kriteenjain/COM-SCI-Captsone.git"
@@ -87,7 +89,7 @@ for i in $(seq 0 $((NUM_WORKERS - 1))); do
             --maintenance-policy=TERMINATE \
             --tags=elastf-worker \
             --scopes=storage-full \
-            --metadata="worker_id=${i},controller_ip=${CONTROLLER_IP},tf_port=${TF_PORT},repo_url=${REPO_URL},branch=${BRANCH},gcs_bucket=${BUCKET}" \
+            --metadata="worker_id=${i},controller_ip=${CONTROLLER_IP},tf_port=${TF_PORT},repo_url=${REPO_URL},branch=${BRANCH},gcs_bucket=${BUCKET},epochs=${EPOCHS},light_model=${LIGHT_MODEL}" \
             --metadata-from-file=startup-script="${SCRIPT_DIR}/worker_startup.sh" \
             --quiet &
     else
@@ -98,7 +100,7 @@ for i in $(seq 0 $((NUM_WORKERS - 1))); do
             --image-project=debian-cloud \
             --tags=elastf-worker \
             --scopes=storage-full \
-            --metadata="worker_id=${i},controller_ip=${CONTROLLER_IP},tf_port=${TF_PORT},repo_url=${REPO_URL},branch=${BRANCH},gcs_bucket=${BUCKET}" \
+            --metadata="worker_id=${i},controller_ip=${CONTROLLER_IP},tf_port=${TF_PORT},repo_url=${REPO_URL},branch=${BRANCH},gcs_bucket=${BUCKET},epochs=${EPOCHS},light_model=${LIGHT_MODEL}" \
             --metadata-from-file=startup-script="${SCRIPT_DIR}/worker_startup.sh" \
             --quiet &
     fi

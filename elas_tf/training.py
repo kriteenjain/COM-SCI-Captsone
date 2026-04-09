@@ -14,6 +14,7 @@ from .checkpointing import ensure_dir
 TOTAL_TRAIN_SAMPLES = 50000
 BATCH_SIZE = 128
 WALL_TIME_FILE = "cumulative_wall_time"
+USE_LIGHT_MODEL = os.getenv("LIGHT_MODEL", "0") == "1"
 
 _METRICS_HEADER = [
     "global_step",
@@ -48,6 +49,17 @@ def _load_cifar10() -> Tuple[tf.data.Dataset, tf.data.Dataset, int]:
 
 
 def _build_model() -> tf.keras.Model:
+    if USE_LIGHT_MODEL:
+        return tf.keras.Sequential([
+            tf.keras.layers.Conv2D(32, 3, activation="relu", input_shape=(32, 32, 3)),
+            tf.keras.layers.Conv2D(64, 3, activation="relu"),
+            tf.keras.layers.MaxPool2D(),
+            tf.keras.layers.Conv2D(128, 3, activation="relu"),
+            tf.keras.layers.MaxPool2D(),
+            tf.keras.layers.Flatten(),
+            tf.keras.layers.Dense(256, activation="relu"),
+            tf.keras.layers.Dense(10, activation="softmax"),
+        ])
     return tf.keras.applications.ResNet50(
         weights=None, input_shape=(32, 32, 3), classes=10
     )
