@@ -64,6 +64,9 @@ else
     echo "[startup] No GPU detected. Running CPU-only training."
 fi
 
+# Force google-auth to use HTTP for GCE metadata (avoids SSL cert issues in venvs)
+export GCE_METADATA_SCHEME=http
+
 # Start worker entrypoint
 export WORKER_ID="$WORKER_ID"
 export CONTROLLER_HOST="$CONTROLLER_IP"
