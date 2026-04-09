@@ -66,7 +66,20 @@ def _poll_restart_signal(controller_url: str, worker_id: str, timeout: int = 120
     return False
 
 
+_active_worker_proc: subprocess.Popen | None = None
+
+
+def _handle_reconfigure(signum, frame):
+    """SIGUSR1 handler: kill the running training subprocess to trigger restart."""
+    global _active_worker_proc
+    if _active_worker_proc and _active_worker_proc.poll() is None:
+        print(f"[entrypoint] Received SIGUSR1 — killing training process (pid={_active_worker_proc.pid})")
+        _active_worker_proc.kill()
+
+
 def main() -> None:
+    signal.signal(signal.SIGUSR1, _handle_reconfigure)
+
     worker_id = os.getenv("WORKER_ID", "0")
     controller_host = os.getenv("CONTROLLER_HOST", "elastf-controller")
     heartbeat_port = int(os.getenv("HEARTBEAT_PORT", "5000"))
@@ -134,11 +147,14 @@ def main() -> None:
             env["GCS_BUCKET"] = gcs_bucket
 
         print(f"[entrypoint] Launching worker process...")
+        global _active_worker_proc
         worker_proc = subprocess.Popen(
             [sys.executable, "-m", "elas_tf.worker"],
             env=env,
         )
+        _active_worker_proc = worker_proc
         exit_code = worker_proc.wait()
+        _active_worker_proc = None
 
         if exit_code == 0:
             print("")

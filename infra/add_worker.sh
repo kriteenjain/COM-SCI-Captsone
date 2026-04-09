@@ -103,9 +103,9 @@ echo ""
 echo "[scale-up] Restarting existing workers to pick up new cluster config..."
 for vm in $CURRENT_WORKERS; do
     WID=$(echo "$vm" | sed 's/elastf-worker-//')
-    echo "[scale-up]   Killing training on $vm (worker $WID)..."
+    echo "[scale-up]   Sending SIGUSR1 to entrypoint on $vm (triggers restart)..."
     gcloud compute ssh "$vm" --zone="$ZONE" \
-        --command="pid=\$(pgrep -f 'elas_tf.worker\$' 2>/dev/null); [ -n \"\$pid\" ] && kill -9 \$pid; echo 'killed training pid='\$pid" 2>/dev/null || true
+        --command="EPID=\$(cat /tmp/elastf_entrypoint.pid 2>/dev/null); [ -n \"\$EPID\" ] && kill -USR1 \$EPID && echo 'Sent SIGUSR1 to entrypoint pid='\$EPID || echo 'No PID file found'" 2>/dev/null || true
 done
 
 echo ""

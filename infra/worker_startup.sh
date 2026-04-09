@@ -78,4 +78,6 @@ export LIGHT_MODEL="$LIGHT_MODEL"
 
 echo "[startup] Starting worker entrypoint (worker_id=$WORKER_ID, tf_port=$TF_PORT)..."
 nohup /opt/elastf_venv/bin/python3 -m elas_tf.worker_entrypoint >> /var/log/elastf.log 2>&1 &
-echo "[startup] Worker entrypoint started (pid=$!)"
+ENTRYPOINT_PID=$!
+echo "$ENTRYPOINT_PID" > /tmp/elastf_entrypoint.pid
+echo "[startup] Worker entrypoint started (pid=$ENTRYPOINT_PID)"
