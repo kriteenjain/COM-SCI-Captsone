@@ -105,7 +105,7 @@ for vm in $CURRENT_WORKERS; do
     WID=$(echo "$vm" | sed 's/elastf-worker-//')
     echo "[scale-up]   Killing training on $vm (worker $WID)..."
     gcloud compute ssh "$vm" --zone="$ZONE" \
-        --command="pkill -f 'elas_tf.worker' 2>/dev/null || true" 2>/dev/null || true
+        --command="pid=\$(pgrep -f 'elas_tf.worker\$' 2>/dev/null); [ -n \"\$pid\" ] && kill -9 \$pid; echo 'killed training pid='\$pid" 2>/dev/null || true
 done
 
 echo ""
