@@ -180,7 +180,7 @@ def main() -> None:
         generation += 1
         print(f"\n[entrypoint] === Generation {generation} ===")
 
-        if generation == 1:
+        if generation == 1 and expected_workers > 0:
             _wait_for_stable_cluster(
                 controller_url,
                 expected_workers=expected_workers,
@@ -188,8 +188,14 @@ def main() -> None:
                 timeout=300,
             )
         else:
-            print(f"[entrypoint] Sleeping 10s for restart stabilization...")
-            time.sleep(10)
+            # For restarts and dynamic scaling, wait for cluster stability
+            # (no generation changes for stability_secs)
+            _wait_for_stable_cluster(
+                controller_url,
+                expected_workers=0,
+                stability_secs=30,
+                timeout=300,
+            )
 
         env = os.environ.copy()
         env["WORKER_ID"] = worker_id

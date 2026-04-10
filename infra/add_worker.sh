@@ -89,31 +89,51 @@ for n in $(seq 1 "$NUM_TO_ADD"); do
 done
 wait
 
+# Count expected total workers
+CURRENT_COUNT=$(echo "$CURRENT_WORKERS" | wc -w | tr -d ' ')
+EXPECTED_TOTAL=$((CURRENT_COUNT + NUM_TO_ADD))
+echo "[scale-up] Expected total workers after scale-up: $EXPECTED_TOTAL"
+
+# Poll controller until all new workers have registered (instead of blind sleep)
 echo ""
-echo "[scale-up] Waiting for new worker(s) to install deps and register (~150s)..."
-sleep 150
+echo "[scale-up] Polling controller until $EXPECTED_TOTAL worker(s) are registered..."
+POLL_DEADLINE=$((SECONDS + 300))
+while [ "$SECONDS" -lt "$POLL_DEADLINE" ]; do
+    NUM_REGISTERED=$(gcloud compute ssh elastf-controller --zone="$ZONE" \
+        --command="curl -s http://localhost:8080/status" 2>/dev/null \
+        | python3 -c "import sys,json; print(json.load(sys.stdin).get('num_workers',0))" 2>/dev/null || echo "0")
+    echo "[scale-up]   Controller sees $NUM_REGISTERED worker(s)..."
+    if [ "$NUM_REGISTERED" -ge "$EXPECTED_TOTAL" ]; then
+        echo "[scale-up]   All $EXPECTED_TOTAL workers registered!"
+        break
+    fi
+    sleep 15
+done
 
 echo ""
 echo "[scale-up] Cluster status after new workers registered:"
 gcloud compute ssh elastf-controller --zone="$ZONE" \
     --command="curl -s http://localhost:8080/status | python3 -m json.tool" 2>/dev/null || true
 
-# Kill training processes on existing workers so they restart with new config
+# Send SIGUSR1 to existing workers IMMEDIATELY so they restart and
+# enter the stability wait at the same time as the new worker(s).
 echo ""
-echo "[scale-up] Restarting existing workers to pick up new cluster config..."
+echo "[scale-up] Sending SIGUSR1 to existing workers (triggers restart)..."
 for vm in $CURRENT_WORKERS; do
     WID=$(echo "$vm" | sed 's/elastf-worker-//')
-    echo "[scale-up]   Sending SIGUSR1 to entrypoint on $vm (triggers restart)..."
+    echo "[scale-up]   Signaling $vm..."
     gcloud compute ssh "$vm" --zone="$ZONE" \
         --command='sudo kill -USR1 $(cat /tmp/elastf_entrypoint.pid 2>/dev/null) 2>/dev/null && echo "Sent SIGUSR1" || echo "Failed to send signal"' 2>/dev/null || true
 done
 
 echo ""
-echo "[scale-up] Existing workers will detect the crash, poll for restart signal,"
-echo "           fetch new TF_CONFIG, and resume training with the larger cluster."
+echo "[scale-up] All workers will now wait for cluster stability (30s of no changes)"
+echo "           before starting training together with the new config."
 echo ""
 
-sleep 20
+# Give workers time to restart and form the new cluster
+echo "[scale-up] Waiting 60s for cluster to re-form..."
+sleep 60
 
 echo "[scale-up] Cluster status AFTER scale-up:"
 gcloud compute ssh elastf-controller --zone="$ZONE" \
