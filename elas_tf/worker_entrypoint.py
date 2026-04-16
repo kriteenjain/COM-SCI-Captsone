@@ -185,7 +185,7 @@ def main() -> None:
             _wait_for_stable_cluster(
                 controller_url,
                 expected_workers=expected_workers,
-                stability_secs=15,
+                stability_secs=10,
                 timeout=300,
             )
         else:

@@ -20,6 +20,8 @@ BRANCH="main"
 USE_GPU=${USE_GPU:-}
 EPOCHS=${EPOCHS:-10}
 LIGHT_MODEL=${LIGHT_MODEL:-0}
+MEDIUM_MODEL=${MEDIUM_MODEL:-0}
+BATCH_SIZE=${BATCH_SIZE:-256}
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
@@ -90,7 +92,7 @@ for n in $(seq 1 "$NUM_TO_ADD"); do
             --maintenance-policy=TERMINATE \
             --tags=elastf-worker \
             --scopes=storage-full \
-            --metadata="worker_id=${NEW_ID},controller_ip=${CONTROLLER_IP},tf_port=${TF_PORT},repo_url=${REPO_URL},branch=${BRANCH},gcs_bucket=${BUCKET},epochs=${EPOCHS},light_model=${LIGHT_MODEL},expected_workers=${EXPECTED_TOTAL}" \
+            --metadata="worker_id=${NEW_ID},controller_ip=${CONTROLLER_IP},tf_port=${TF_PORT},repo_url=${REPO_URL},branch=${BRANCH},gcs_bucket=${BUCKET},epochs=${EPOCHS},light_model=${LIGHT_MODEL},medium_model=${MEDIUM_MODEL},batch_size=${BATCH_SIZE},expected_workers=${EXPECTED_TOTAL}" \
             --metadata-from-file=startup-script="${SCRIPT_DIR}/worker_startup.sh" \
             --quiet &
     else
@@ -101,7 +103,7 @@ for n in $(seq 1 "$NUM_TO_ADD"); do
             --image-project=debian-cloud \
             --tags=elastf-worker \
             --scopes=storage-full \
-            --metadata="worker_id=${NEW_ID},controller_ip=${CONTROLLER_IP},tf_port=${TF_PORT},repo_url=${REPO_URL},branch=${BRANCH},gcs_bucket=${BUCKET},epochs=${EPOCHS},light_model=${LIGHT_MODEL},expected_workers=${EXPECTED_TOTAL}" \
+            --metadata="worker_id=${NEW_ID},controller_ip=${CONTROLLER_IP},tf_port=${TF_PORT},repo_url=${REPO_URL},branch=${BRANCH},gcs_bucket=${BUCKET},epochs=${EPOCHS},light_model=${LIGHT_MODEL},medium_model=${MEDIUM_MODEL},batch_size=${BATCH_SIZE},expected_workers=${EXPECTED_TOTAL}" \
             --metadata-from-file=startup-script="${SCRIPT_DIR}/worker_startup.sh" \
             --quiet &
     fi
@@ -141,12 +143,12 @@ for vm in $CURRENT_WORKERS; do
 done
 
 echo ""
-echo "[scale-up] All workers will now wait for cluster stability (30s of no changes)"
-echo "           before starting training together with the new config."
+echo "[scale-up] All workers will now wait for cluster stability (~15s of no changes)"
+echo "           before resuming training together with the new config."
 echo ""
 
 echo "[scale-up] Waiting for the restarted cluster to settle..."
-SETTLE_DEADLINE=$((SECONDS + 90))
+SETTLE_DEADLINE=$((SECONDS + 45))
 while [ "$SECONDS" -lt "$SETTLE_DEADLINE" ]; do
     NUM_REGISTERED=$(gcloud compute ssh elastf-controller --zone="$ZONE" \
         --command="curl -s http://localhost:8080/status" 2>/dev/null \

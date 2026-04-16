@@ -3,6 +3,7 @@ import glob
 import json
 import os
 import re
+import threading
 import time
 from typing import Optional, Tuple
 
@@ -12,9 +13,10 @@ import tensorflow as tf
 from .checkpointing import ensure_dir
 
 TOTAL_TRAIN_SAMPLES = 50000
-BATCH_SIZE = 128
+BATCH_SIZE = int(os.getenv("BATCH_SIZE", "256"))
 WALL_TIME_FILE = "cumulative_wall_time"
 USE_LIGHT_MODEL = os.getenv("LIGHT_MODEL", "0") == "1"
+USE_MEDIUM_MODEL = os.getenv("MEDIUM_MODEL", "0") == "1"
 
 _METRICS_HEADER = [
     "global_step",
@@ -42,8 +44,16 @@ def _load_cifar10() -> Tuple[tf.data.Dataset, tf.data.Dataset, int]:
     train_ds = tf.data.Dataset.from_tensor_slices((x_train, y_train))
     test_ds = tf.data.Dataset.from_tensor_slices((x_test, y_test))
 
-    train_ds = train_ds.shuffle(10000).batch(BATCH_SIZE)
-    test_ds = test_ds.batch(BATCH_SIZE)
+    # cache() keeps the dataset in RAM (CIFAR-10 is ~170MB), so subsequent
+    # epochs skip any per-sample decoding. prefetch(AUTOTUNE) overlaps data
+    # loading with gradient computation so workers stay busy during sync.
+    train_ds = (
+        train_ds.shuffle(10000)
+        .batch(BATCH_SIZE)
+        .cache()
+        .prefetch(tf.data.AUTOTUNE)
+    )
+    test_ds = test_ds.batch(BATCH_SIZE).cache().prefetch(tf.data.AUTOTUNE)
     train_size = x_train.shape[0]
     return train_ds, test_ds, int(train_size)
 
@@ -58,6 +68,38 @@ def _build_model() -> tf.keras.Model:
             tf.keras.layers.MaxPool2D(),
             tf.keras.layers.Flatten(),
             tf.keras.layers.Dense(256, activation="relu"),
+            tf.keras.layers.Dense(10, activation="softmax"),
+        ])
+    if USE_MEDIUM_MODEL:
+        # ~3M parameter CNN: enough compute per step that gradient sync
+        # overhead is small relative to per-worker compute, so adding
+        # workers actually speeds up training.
+        reg = tf.keras.regularizers.l2(1e-4)
+        return tf.keras.Sequential([
+            tf.keras.layers.Conv2D(64, 3, padding="same", activation="relu",
+                                   kernel_regularizer=reg, input_shape=(32, 32, 3)),
+            tf.keras.layers.BatchNormalization(),
+            tf.keras.layers.Conv2D(64, 3, padding="same", activation="relu",
+                                   kernel_regularizer=reg),
+            tf.keras.layers.BatchNormalization(),
+            tf.keras.layers.MaxPool2D(),
+            tf.keras.layers.Conv2D(128, 3, padding="same", activation="relu",
+                                   kernel_regularizer=reg),
+            tf.keras.layers.BatchNormalization(),
+            tf.keras.layers.Conv2D(128, 3, padding="same", activation="relu",
+                                   kernel_regularizer=reg),
+            tf.keras.layers.BatchNormalization(),
+            tf.keras.layers.MaxPool2D(),
+            tf.keras.layers.Conv2D(256, 3, padding="same", activation="relu",
+                                   kernel_regularizer=reg),
+            tf.keras.layers.BatchNormalization(),
+            tf.keras.layers.Conv2D(256, 3, padding="same", activation="relu",
+                                   kernel_regularizer=reg),
+            tf.keras.layers.BatchNormalization(),
+            tf.keras.layers.MaxPool2D(),
+            tf.keras.layers.Flatten(),
+            tf.keras.layers.Dense(512, activation="relu", kernel_regularizer=reg),
+            tf.keras.layers.Dropout(0.5),
             tf.keras.layers.Dense(10, activation="softmax"),
         ])
     return tf.keras.applications.ResNet50(
@@ -174,7 +216,8 @@ def run_baseline_training(epochs: int = 5) -> None:
     print("")
     print("=" * 60)
     print(f"[training] WORKER {worker_index} of {num_workers} starting up")
-    print(f"[training] Model: ResNet-50 on CIFAR-10 ({TOTAL_TRAIN_SAMPLES} samples)")
+    model_name = "Light CNN" if USE_LIGHT_MODEL else ("Medium CNN (~3M params)" if USE_MEDIUM_MODEL else "ResNet-50")
+    print(f"[training] Model: {model_name} on CIFAR-10 ({TOTAL_TRAIN_SAMPLES} samples)")
     print("=" * 60)
 
     tf_config = os.getenv("TF_CONFIG")
@@ -323,8 +366,21 @@ def run_baseline_training(epochs: int = 5) -> None:
                 csv.writer(f).writerow(row)
             print(f"[metrics]  Row appended -> {csv_path}")
 
-            _maybe_upload_checkpoint_to_gcs(checkpoint_dir)
+            # Metrics upload is tiny (~1KB) and inline.
             _maybe_upload_metrics_to_gcs(csv_path)
+
+            # Checkpoint upload is bigger — run it in a background thread so
+            # the next epoch can start immediately. Correctness is preserved
+            # because the local checkpoint is already written by the
+            # ModelCheckpoint callback; GCS just mirrors it for new workers
+            # that join mid-training. If a scale-up happens before an upload
+            # finishes, add_worker.sh's polling wait + stability wait gives
+            # the upload time to complete.
+            threading.Thread(
+                target=_maybe_upload_checkpoint_to_gcs,
+                args=(checkpoint_dir,),
+                daemon=True,
+            ).start()
 
     epoch_log_cb = tf.keras.callbacks.LambdaCallback(
         on_epoch_begin=on_epoch_begin,
@@ -359,7 +415,7 @@ def run_baseline_training(epochs: int = 5) -> None:
     print("")
     print("=" * 60)
     print(f"[training] TRAINING COMPLETE (worker {worker_index})")
-    print(f"[training]   Model:                 ResNet-50 on CIFAR-10")
+    print(f"[training]   Model:                 {model_name} on CIFAR-10")
     print(f"[training]   Epochs trained:        {remaining_epochs} (epoch {completed_epochs + 1} to {epochs})")
     print(f"[training]   This generation time:  {generation_wall_time:.2f}s")
     print(f"[training]   Cumulative wall time:  {cumulative_wall_time:.2f}s")
