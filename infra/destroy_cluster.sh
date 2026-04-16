@@ -5,24 +5,28 @@
 #
 set -euo pipefail
 
-ZONE=${ZONE:-us-central1-a}
-
 echo ""
 echo "============================================================"
 echo " ElasTF Cluster Teardown"
 echo "============================================================"
 echo ""
 
-# Find and delete all elastf VMs
-echo "[teardown] Finding ElasTF VMs..."
-VMS=$(gcloud compute instances list --filter="name~'^elastf-'" --format="value(name)" --zones="$ZONE" 2>/dev/null || true)
+# Find ElasTF VMs in ANY zone (not just one), so the script works regardless
+# of which zone was used to create the cluster.
+echo "[teardown] Finding ElasTF VMs across all zones..."
+VMS_WITH_ZONES=$(gcloud compute instances list \
+    --filter="name~'^elastf-'" \
+    --format="value(name,zone)" 2>/dev/null || true)
 
-if [ -z "$VMS" ]; then
+if [ -z "$VMS_WITH_ZONES" ]; then
     echo "[teardown] No ElasTF VMs found."
 else
-    echo "[teardown] Deleting VMs: $VMS"
-    for vm in $VMS; do
-        gcloud compute instances delete "$vm" --zone="$ZONE" --quiet &
+    echo "[teardown] Deleting VMs:"
+    echo "$VMS_WITH_ZONES" | while read -r name zone; do
+        echo "  - $name (zone: $zone)"
+    done
+    echo "$VMS_WITH_ZONES" | while read -r name zone; do
+        gcloud compute instances delete "$name" --zone="$zone" --quiet &
     done
     wait
     echo "[teardown] All VMs deleted."
