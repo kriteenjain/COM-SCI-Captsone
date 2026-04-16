@@ -9,29 +9,38 @@ exec > >(tee -a /var/log/elastf.log) 2>&1
 echo "[startup] ElasTF Worker startup script running..."
 echo "[startup] $(date)"
 
-# Fetch metadata
-WORKER_ID=$(curl -sf -H "Metadata-Flavor: Google" \
-    "http://metadata.google.internal/computeMetadata/v1/instance/attributes/worker_id" || echo "0")
-CONTROLLER_IP=$(curl -sf -H "Metadata-Flavor: Google" \
-    "http://metadata.google.internal/computeMetadata/v1/instance/attributes/controller_ip" || echo "")
-TF_PORT=$(curl -sf -H "Metadata-Flavor: Google" \
-    "http://metadata.google.internal/computeMetadata/v1/instance/attributes/tf_port" || echo "35000")
-REPO_URL=$(curl -sf -H "Metadata-Flavor: Google" \
-    "http://metadata.google.internal/computeMetadata/v1/instance/attributes/repo_url" || echo "")
-BRANCH=$(curl -sf -H "Metadata-Flavor: Google" \
-    "http://metadata.google.internal/computeMetadata/v1/instance/attributes/branch" || echo "main")
-GCS_BUCKET=$(curl -sf -H "Metadata-Flavor: Google" \
-    "http://metadata.google.internal/computeMetadata/v1/instance/attributes/gcs_bucket" || echo "")
-EPOCHS=$(curl -sf -H "Metadata-Flavor: Google" \
-    "http://metadata.google.internal/computeMetadata/v1/instance/attributes/epochs" || echo "10")
-LIGHT_MODEL=$(curl -sf -H "Metadata-Flavor: Google" \
-    "http://metadata.google.internal/computeMetadata/v1/instance/attributes/light_model" || echo "0")
-MEDIUM_MODEL=$(curl -sf -H "Metadata-Flavor: Google" \
-    "http://metadata.google.internal/computeMetadata/v1/instance/attributes/medium_model" || echo "0")
-BATCH_SIZE=$(curl -sf -H "Metadata-Flavor: Google" \
-    "http://metadata.google.internal/computeMetadata/v1/instance/attributes/batch_size" || echo "256")
-EXPECTED_WORKERS=$(curl -sf -H "Metadata-Flavor: Google" \
-    "http://metadata.google.internal/computeMetadata/v1/instance/attributes/expected_workers" || echo "0")
+# Helper: fetch a metadata attribute with retry (the metadata server may not
+# be ready immediately after VM boot). Returns empty string after max retries.
+fetch_meta() {
+    local key="$1"
+    local default_val="${2:-}"
+    local attempts=30
+    for i in $(seq 1 $attempts); do
+        local val
+        val=$(curl -sf -H "Metadata-Flavor: Google" \
+            "http://metadata.google.internal/computeMetadata/v1/instance/attributes/${key}" 2>/dev/null || echo "")
+        if [ -n "$val" ]; then
+            echo "$val"
+            return 0
+        fi
+        sleep 2
+    done
+    echo "$default_val"
+}
+
+# Wait for critical metadata (controller_ip) to be available before continuing.
+echo "[startup] Fetching instance metadata (with retry)..."
+CONTROLLER_IP=$(fetch_meta controller_ip "")
+WORKER_ID=$(fetch_meta worker_id "0")
+TF_PORT=$(fetch_meta tf_port "35000")
+REPO_URL=$(fetch_meta repo_url "")
+BRANCH=$(fetch_meta branch "main")
+GCS_BUCKET=$(fetch_meta gcs_bucket "")
+EPOCHS=$(fetch_meta epochs "10")
+LIGHT_MODEL=$(fetch_meta light_model "0")
+MEDIUM_MODEL=$(fetch_meta medium_model "0")
+BATCH_SIZE=$(fetch_meta batch_size "256")
+EXPECTED_WORKERS=$(fetch_meta expected_workers "0")
 
 echo "[startup] Worker ID: $WORKER_ID"
 echo "[startup] Controller IP: $CONTROLLER_IP"
