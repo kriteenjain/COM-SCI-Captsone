@@ -17,7 +17,7 @@ PROJECT=$(gcloud config get-value project 2>/dev/null)
 BUCKET="elastf-checkpoints-${PROJECT}"
 REPO_URL="https://github.com/kriteenjain/COM-SCI-Captsone.git"
 BRANCH="main"
-USE_GPU=${USE_GPU:-0}
+USE_GPU=${USE_GPU:-}
 EPOCHS=${EPOCHS:-10}
 LIGHT_MODEL=${LIGHT_MODEL:-0}
 
@@ -43,9 +43,28 @@ for vm in $CURRENT_WORKERS; do
     [ "$WID" -gt "$MAX_ID" ] && MAX_ID="$WID"
 done
 
+CURRENT_COUNT=$(echo "$CURRENT_WORKERS" | wc -w | tr -d ' ')
+EXPECTED_TOTAL=$((CURRENT_COUNT + NUM_TO_ADD))
+
+if [ -z "$USE_GPU" ] && [ -n "$CURRENT_WORKERS" ]; then
+    FIRST_WORKER=$(echo "$CURRENT_WORKERS" | head -n 1)
+    EXISTING_GPU_COUNT=$(gcloud compute instances describe "$FIRST_WORKER" \
+        --zone="$ZONE" \
+        --format='value(guestAccelerators[0].acceleratorCount)' 2>/dev/null || true)
+    if [ -n "$EXISTING_GPU_COUNT" ] && [ "$EXISTING_GPU_COUNT" -gt 0 ] 2>/dev/null; then
+        USE_GPU=1
+    else
+        USE_GPU=0
+    fi
+fi
+
+USE_GPU=${USE_GPU:-0}
+
 echo "[scale-up] Current workers: $CURRENT_WORKERS"
 echo "[scale-up] Highest worker ID: $MAX_ID"
 echo "[scale-up] Controller IP: $CONTROLLER_IP"
+echo "[scale-up] Existing worker type: $( [ "$USE_GPU" -eq 1 ] && echo "GPU" || echo "CPU" )"
+echo "[scale-up] Expected total workers after scale-up: $EXPECTED_TOTAL"
 
 echo ""
 echo "[scale-up] Cluster status BEFORE scale-up:"
@@ -71,7 +90,7 @@ for n in $(seq 1 "$NUM_TO_ADD"); do
             --maintenance-policy=TERMINATE \
             --tags=elastf-worker \
             --scopes=storage-full \
-            --metadata="worker_id=${NEW_ID},controller_ip=${CONTROLLER_IP},tf_port=${TF_PORT},repo_url=${REPO_URL},branch=${BRANCH},gcs_bucket=${BUCKET},epochs=${EPOCHS},light_model=${LIGHT_MODEL}" \
+            --metadata="worker_id=${NEW_ID},controller_ip=${CONTROLLER_IP},tf_port=${TF_PORT},repo_url=${REPO_URL},branch=${BRANCH},gcs_bucket=${BUCKET},epochs=${EPOCHS},light_model=${LIGHT_MODEL},expected_workers=${EXPECTED_TOTAL}" \
             --metadata-from-file=startup-script="${SCRIPT_DIR}/worker_startup.sh" \
             --quiet &
     else
@@ -82,17 +101,12 @@ for n in $(seq 1 "$NUM_TO_ADD"); do
             --image-project=debian-cloud \
             --tags=elastf-worker \
             --scopes=storage-full \
-            --metadata="worker_id=${NEW_ID},controller_ip=${CONTROLLER_IP},tf_port=${TF_PORT},repo_url=${REPO_URL},branch=${BRANCH},gcs_bucket=${BUCKET},epochs=${EPOCHS},light_model=${LIGHT_MODEL}" \
+            --metadata="worker_id=${NEW_ID},controller_ip=${CONTROLLER_IP},tf_port=${TF_PORT},repo_url=${REPO_URL},branch=${BRANCH},gcs_bucket=${BUCKET},epochs=${EPOCHS},light_model=${LIGHT_MODEL},expected_workers=${EXPECTED_TOTAL}" \
             --metadata-from-file=startup-script="${SCRIPT_DIR}/worker_startup.sh" \
             --quiet &
     fi
 done
 wait
-
-# Count expected total workers
-CURRENT_COUNT=$(echo "$CURRENT_WORKERS" | wc -w | tr -d ' ')
-EXPECTED_TOTAL=$((CURRENT_COUNT + NUM_TO_ADD))
-echo "[scale-up] Expected total workers after scale-up: $EXPECTED_TOTAL"
 
 # Poll controller until all new workers have registered (instead of blind sleep)
 echo ""
@@ -131,9 +145,18 @@ echo "[scale-up] All workers will now wait for cluster stability (30s of no chan
 echo "           before starting training together with the new config."
 echo ""
 
-# Give workers time to restart and form the new cluster
-echo "[scale-up] Waiting 60s for cluster to re-form..."
-sleep 60
+echo "[scale-up] Waiting for the restarted cluster to settle..."
+SETTLE_DEADLINE=$((SECONDS + 90))
+while [ "$SECONDS" -lt "$SETTLE_DEADLINE" ]; do
+    NUM_REGISTERED=$(gcloud compute ssh elastf-controller --zone="$ZONE" \
+        --command="curl -s http://localhost:8080/status" 2>/dev/null \
+        | python3 -c "import sys,json; print(json.load(sys.stdin).get('num_workers',0))" 2>/dev/null || echo "0")
+    echo "[scale-up]   Cluster currently reports $NUM_REGISTERED worker(s)..."
+    if [ "$NUM_REGISTERED" -eq "$EXPECTED_TOTAL" ]; then
+        break
+    fi
+    sleep 5
+done
 
 echo "[scale-up] Cluster status AFTER scale-up:"
 gcloud compute ssh elastf-controller --zone="$ZONE" \

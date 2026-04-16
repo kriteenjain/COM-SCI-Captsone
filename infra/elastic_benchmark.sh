@@ -108,7 +108,6 @@ run_scenario() {
         echo "[bench] >>> SCALING ACTION: Adding 1 worker (2 → 3) <<<"
         ZONE=$ZONE LIGHT_MODEL=1 EPOCHS=$EPOCHS bash "${SCRIPT_DIR}/add_worker.sh" 1
         echo "[bench] Waiting for remaining epochs..."
-        sleep 60
         wait_for_epoch $EPOCHS
     elif [ "$scale_action" = "add_2" ]; then
         wait_for_epoch $SCALE_AT_EPOCH
@@ -116,7 +115,6 @@ run_scenario() {
         echo "[bench] >>> SCALING ACTION: Adding 2 workers (2 → 4) <<<"
         ZONE=$ZONE LIGHT_MODEL=1 EPOCHS=$EPOCHS bash "${SCRIPT_DIR}/add_worker.sh" 2
         echo "[bench] Waiting for remaining epochs..."
-        sleep 60
         wait_for_epoch $EPOCHS
     fi
 

@@ -132,6 +132,7 @@ def main() -> None:
     checkpoint_dir = os.getenv("CHECKPOINT_DIR", "/tmp/elastf_checkpoints")
     gcs_bucket = os.getenv("GCS_BUCKET", "")
     expected_workers = int(os.getenv("EXPECTED_WORKERS", "0"))
+    restart_stability_secs = int(os.getenv("RESTART_STABILITY_SECS", "8"))
 
     controller_url = os.getenv(
         "CONTROLLER_URL", f"http://{controller_host}:{http_port}"
@@ -193,7 +194,7 @@ def main() -> None:
             _wait_for_stable_cluster(
                 controller_url,
                 expected_workers=0,
-                stability_secs=30,
+                stability_secs=restart_stability_secs,
                 timeout=300,
             )
 
