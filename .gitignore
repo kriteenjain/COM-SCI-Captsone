@@ -10,3 +10,7 @@ __pycache__/
 # Runtime artifacts 
 shared/
 
+elastic_results/baseline_2w.csv
+elastic_results/elastic_comparison.png
+elastic_results/scale_down_2to1.csv
+elastic_results/scale_up_2to3.csv

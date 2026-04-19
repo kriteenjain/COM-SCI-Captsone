@@ -20,7 +20,10 @@ BRANCH="main"
 USE_GPU=${USE_GPU:-}
 EPOCHS=${EPOCHS:-10}
 LIGHT_MODEL=${LIGHT_MODEL:-0}
-MEDIUM_MODEL=${MEDIUM_MODEL:-0}
+# Must match create_cluster.sh default — new workers need the same model
+# architecture as existing ones, otherwise checkpoint restore will fail
+# with a shape mismatch.
+MEDIUM_MODEL=${MEDIUM_MODEL:-1}
 BATCH_SIZE=${BATCH_SIZE:-256}
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"

@@ -14,7 +14,10 @@ ZONE=${ZONE:-us-west1-a}
 USE_GPU=${USE_GPU:-0}
 EPOCHS=${EPOCHS:-10}
 LIGHT_MODEL=${LIGHT_MODEL:-0}
-MEDIUM_MODEL=${MEDIUM_MODEL:-0}
+# Default to the medium CNN (~3M params). This matches the model used for
+# the baseline/scale-down/scale-up benchmarks and the checkpoints in GCS.
+# To use ResNet-50 set MEDIUM_MODEL=0, to use the light CNN set LIGHT_MODEL=1.
+MEDIUM_MODEL=${MEDIUM_MODEL:-1}
 BATCH_SIZE=${BATCH_SIZE:-256}
 PROJECT=$(gcloud config get-value project 2>/dev/null)
 BUCKET="elastf-checkpoints-${PROJECT}"
