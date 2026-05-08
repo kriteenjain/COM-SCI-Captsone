@@ -1,8 +1,10 @@
 # COM SCI Capstone — ElasTF
 
-Elastic distributed GPU training with TensorFlow on GCP.
+Elastic distributed TensorFlow training on GCP.
 
-ElasTF trains a **ResNet-50 on CIFAR-10** across multiple GCP VMs, each with a dedicated T4 GPU. The controller coordinates workers via a heartbeat protocol and HTTP API, with checkpoints stored in Google Cloud Storage. Workers can join, leave, or crash — the cluster recovers automatically.
+ElasTF trains a CNN on **CIFAR-10** across multiple GCP VMs. The controller coordinates workers via a heartbeat protocol and HTTP API, with checkpoints stored in Google Cloud Storage. Workers can join, leave, or crash mid-training — the cluster recovers automatically and resumes from the latest checkpoint.
+
+By default the cluster runs on **CPU-only `e2-standard-8` VMs** (8 vCPU / 32 GB RAM each). An optional GPU path (`n1-standard-4` + NVIDIA T4) is gated behind a `USE_GPU=1` flag for users with GPU quota.
 
 ## Architecture
 
@@ -21,7 +23,7 @@ ElasTF trains a **ResNet-50 on CIFAR-10** across multiple GCP VMs, each with a d
 │   ▼        ▼                          ▼               │
 │ ┌────────┐ ┌────────┐    ┌────────┐  ┌────────┐     │
 │ │Worker 0│ │Worker 1│    │Worker 2│  │Worker 3│     │
-│ │ T4 GPU │ │ T4 GPU │◄──►│ T4 GPU │  │ T4 GPU │     │
+│ │  CPU   │ │  CPU   │◄──►│  CPU   │  │  CPU   │     │
 │ └────┬───┘ └────┬───┘    └────┬───┘  └────┬───┘     │
 │      │          │             │            │          │
 │      └──────────┴─────────────┴────────────┘          │
@@ -33,136 +35,161 @@ ElasTF trains a **ResNet-50 on CIFAR-10** across multiple GCP VMs, each with a d
 └───────────────────────────────────────────────────────┘
 ```
 
+Workers run `e2-standard-8` (CPU) by default. Pass `USE_GPU=1` to provision `n1-standard-4` + T4 instead.
+
 ## Project layout
 
 ```text
 ElasTF/
 ├── elas_tf/
-│   ├── controller.py        # Heartbeat monitor + HTTP API
-│   ├── worker.py            # Worker: loads TF_CONFIG, runs training
-│   ├── worker_entrypoint.py # Cloud lifecycle manager (replaces bash)
-│   ├── training.py          # ResNet-50 on CIFAR-10, distributed
-│   ├── heartbeat.py         # Heartbeat server (TCP)
-│   ├── heartbeat_sender.py  # Heartbeat client (survives TF crashes)
-│   ├── gcs_storage.py       # GCS checkpoint upload/download
-│   ├── checkpointing.py     # Checkpoint utilities
-│   └── plot_training.py     # Metrics visualization
+│   ├── controller.py          # Heartbeat monitor + HTTP API
+│   ├── worker.py              # Worker: loads TF_CONFIG, runs training
+│   ├── worker_entrypoint.py   # Cloud lifecycle manager
+│   ├── training.py            # CNN on CIFAR-10, distributed
+│   ├── heartbeat.py           # Heartbeat server (TCP)
+│   ├── heartbeat_sender.py    # Heartbeat client (survives TF crashes)
+│   ├── gcs_storage.py         # GCS checkpoint upload/download
+│   ├── checkpointing.py       # Checkpoint utilities
+│   └── plot_training.py       # Per-run metrics visualization
 ├── infra/
-│   ├── create_cluster.sh    # Provision GCP cluster
-│   ├── destroy_cluster.sh   # Tear down GCP cluster
-│   ├── controller_startup.sh # Controller VM startup script
-│   ├── worker_startup.sh    # Worker VM startup script
-│   ├── run_benchmark.sh     # Automated 1/2/4 GPU benchmark
-│   └── plot_speedup.py      # Plot speedup curve from results
-├── launch.sh                # Local-mode supervisor (macOS)
-├── add_worker.sh            # Local-mode: add workers
-├── kill_workers.sh          # Local-mode: simulate failures
+│   ├── create_cluster.sh      # Provision GCP cluster
+│   ├── destroy_cluster.sh     # Tear down GCP cluster
+│   ├── controller_startup.sh  # Controller VM startup script
+│   ├── worker_startup.sh      # Worker VM startup script
+│   ├── add_worker.sh          # Add a worker to a running cluster
+│   ├── remove_worker.sh       # Remove a worker from a running cluster
+│   ├── elastic_benchmark.sh   # Automated elastic-scaling benchmark
+│   ├── plot_elastic.py        # Plot elastic-scaling results
+│   └── plot_speedup.py        # Plot strong-scaling speedup curve
+├── elastic_results/           # Benchmark CSVs + comparison plot
 ├── requirements.txt
-└── shared/                  # Local-mode runtime state
+└── README.md
 ```
+
+## Models
+
+`elas_tf/training.py` supports three model sizes, selected via env vars:
+
+| Flag                 | Model                         | Params  | Default |
+|----------------------|-------------------------------|---------|---------|
+| (none)               | ResNet-50 (Keras Applications)| ~23.5M  |         |
+| `MEDIUM_MODEL=1`     | Medium CNN (custom)           | ~3M     |  ✅     |
+| `LIGHT_MODEL=1`      | Lightweight CNN (custom)      | ~600k   |         |
+
+The medium CNN is the default because it has enough compute per step for distributed training to actually beat single-worker training on CPU — gradient-sync overhead is small relative to per-worker compute. The light CNN is used by `elastic_benchmark.sh` to keep iteration time short.
 
 ## Prerequisites
 
 - **GCP project** with billing enabled
 - **gcloud CLI** authenticated (`gcloud auth login`)
-- **GPU quota**: at least 4x NVIDIA T4 in your chosen zone
 - **APIs enabled**: Compute Engine, Cloud Storage
+- **GPU quota** is *only* required if you set `USE_GPU=1` (≥ N × NVIDIA T4 in your zone)
 
-## Quick Start (GCP Distributed)
+## Quick Start
 
 ### 1. Provision the cluster
 
 ```bash
 cd ElasTF
 
-# Default: 4 workers with T4 GPUs
+# Default: 4 CPU workers (e2-standard-8)
 ./infra/create_cluster.sh
 
-# Or specify worker count
+# Specify worker count
 ./infra/create_cluster.sh 2
+
+# Use T4 GPUs instead (requires quota)
+USE_GPU=1 ./infra/create_cluster.sh 2
 ```
 
 This creates:
 - 1 controller VM (`e2-medium`, no GPU)
-- N worker VMs (`n1-standard-4` + T4 GPU each)
-- GCS bucket for checkpoints
+- N worker VMs (CPU by default, GPU with `USE_GPU=1`)
+- GCS bucket for checkpoints (`elastf-checkpoints-<project>`)
 - Firewall rules for internal communication
 
-Workers auto-start training once they register with the controller.
+Workers auto-start training as soon as they register with the controller.
 
 ### 2. Monitor training
 
 ```bash
 # Controller logs
-gcloud compute ssh elastf-controller --zone=us-central1-a -- tail -f /var/log/elastf.log
+gcloud compute ssh elastf-controller --zone=us-west1-a -- tail -f /var/log/elastf.log
 
 # Worker logs
-gcloud compute ssh elastf-worker-0 --zone=us-central1-a -- tail -f /var/log/elastf.log
+gcloud compute ssh elastf-worker-0 --zone=us-west1-a -- tail -f /var/log/elastf.log
 
-# Cluster status (from any machine with network access)
+# Cluster status
 curl http://<controller-external-ip>:8080/status
 ```
 
-### 3. Simulate failures
+### 3. Scale at runtime
 
 ```bash
-# Kill a worker VM
-gcloud compute instances delete elastf-worker-2 --zone=us-central1-a --quiet
+# Add a worker (scale up)
+./infra/add_worker.sh 1
 
-# Remaining workers detect the failure, restart, and resume from checkpoint
+# Remove a worker (scale down) — simulates failure
+./infra/remove_worker.sh 1
+
+# Or kill a VM directly to simulate a crash
+gcloud compute instances delete elastf-worker-2 --zone=us-west1-a --quiet
 ```
 
-### 4. Scale up
+The remaining workers detect membership changes via heartbeat, restart the TF process, reshard the dataset, and resume from the latest checkpoint.
 
-```bash
-# Add more workers to a running cluster
-# (Re-run create with higher count; existing workers restart)
-./infra/create_cluster.sh 6
-```
-
-### 5. Tear down
+### 4. Tear down
 
 ```bash
 ./infra/destroy_cluster.sh
 ```
 
-## Running the Benchmark
+## Elastic-scaling benchmark
 
-The benchmark script provisions clusters with 1, 2, and 4 workers, runs 10 epochs each, and collects wall times.
+`infra/elastic_benchmark.sh` runs four scenarios (10 epochs each, lightweight CNN) and writes per-epoch metrics + a summary CSV to `elastic_results/`:
 
-```bash
-./infra/run_benchmark.sh
-
-# Plot the speedup curve
-python3 infra/plot_speedup.py
-```
-
-### Expected Results (ResNet-50, CIFAR-10, 10 epochs)
-
-| Workers | GPUs | Wall Time  | Speedup |
-|---------|------|------------|---------|
-| 1       | 1xT4 | ~700s     | 1.0x    |
-| 2       | 2xT4 | ~400s     | 1.75x   |
-| 4       | 4xT4 | ~220s     | 3.2x    |
-
-Sub-linear speedup is expected due to gradient synchronization overhead.
-
-## Local Mode (macOS)
-
-The original local-only mode still works for development:
+1. **Baseline** — 2 workers, static
+2. **Scale-down** — 2 workers, kill 1 at epoch 3 → finish with 1
+3. **Scale-up to 3** — 2 workers, add 1 at epoch 3 → finish with 3
+4. **Scale-up to 4** — 2 workers, add 2 at epoch 3 → finish with 4
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install tensorflow-macos==2.15.0
-pip install -r requirements.txt
-
-chmod +x launch.sh kill_workers.sh add_worker.sh
-./launch.sh
+./infra/elastic_benchmark.sh
+python3 infra/plot_elastic.py
 ```
 
-## Cost Estimate
+### Measured results (CIFAR-10, 10 epochs, CPU workers)
 
-- Controller: ~$0.03/hr
-- Each T4 worker: ~$0.95/hr
-- Full benchmark (1+2+4 worker runs, ~1hr each): ~$6-8 total
+From `elastic_results/*.csv`:
+
+| Scenario              | Worker timeline    | Wall time | Final val acc |
+|-----------------------|--------------------|-----------|---------------|
+| Baseline (2 workers)  | 2 → 2              | 1864 s    | 0.790         |
+| Scale-up 2→3          | 2 → 3 (at epoch 6) | 1327 s    | 0.727         |
+| Scale-down 2→1        | 2 → 1 (at epoch 4) | 2979 s    | 0.819         |
+
+Cross-run variance comes from VM cold-start time and shared-tenant CPU jitter on `e2-standard-8`. The scale-up run completes faster than the baseline because the extra worker arrives early; the scale-down run takes ~1.6× the baseline because the surviving worker now owns the full dataset shard. Final accuracies vary by ±0.05 across runs at this epoch budget.
+
+`elastic_results/elastic_comparison.png` shows the bar chart and per-epoch timeline (with annotated worker-count transitions) generated by `plot_elastic.py`.
+
+### Strong-scaling benchmark (optional)
+
+For users with GPU quota, `infra/plot_speedup.py` plots a speedup curve from runs at different worker counts. Re-provision the cluster with `USE_GPU=1` and the desired worker count, run training, and feed the metrics CSVs into the plotter.
+
+## Cost estimate (us-west1)
+
+- Controller (`e2-medium`):       ~$0.03/hr
+- Each CPU worker (`e2-standard-8`): ~$0.27/hr
+- Each GPU worker (`n1-standard-4` + T4): ~$0.55/hr (T4) + ~$0.19/hr (VM)
+
+A full elastic benchmark (4 scenarios, ~30–50 min each on CPU) runs for roughly $2–4 total.
+
+## Dependencies
+
+See `requirements.txt`:
+
+- `tensorflow==2.15.0`
+- `numpy`, `grpcio`, `protobuf`
+- `flask`, `requests` (controller HTTP API)
+- `google-cloud-storage` (checkpoint persistence)
+- `matplotlib` (plotting)
